@@ -28,7 +28,6 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -53,7 +52,6 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.viewModelScope
@@ -65,9 +63,11 @@ import kotlinx.coroutines.Dispatchers
 import li.songe.gkd.data.RawSubscription
 import li.songe.gkd.data.SubsConfig
 import li.songe.gkd.db.DbSet
+import li.songe.gkd.ui.component.TowLineText
 import li.songe.gkd.ui.component.getDialogResult
 import li.songe.gkd.ui.destinations.GlobalRuleExcludePageDestination
-import li.songe.gkd.ui.destinations.GroupItemPageDestination
+import li.songe.gkd.ui.destinations.GroupImagePageDestination
+import li.songe.gkd.ui.style.itemPadding
 import li.songe.gkd.util.LocalNavController
 import li.songe.gkd.util.ProfileTransitions
 import li.songe.gkd.util.encodeToJson5String
@@ -117,7 +117,10 @@ fun GlobalRulePage(subsItemId: Long, focusGroupKey: Int? = null) {
                     )
                 }
             }, title = {
-                Text(text = "全局规则/${rawSubs?.name ?: subsItemId}")
+                TowLineText(
+                    title = rawSubs?.name ?: subsItemId.toString(),
+                    subTitle = "全局规则"
+                )
             })
         },
         floatingActionButton = {
@@ -139,7 +142,7 @@ fun GlobalRulePage(subsItemId: Long, focusGroupKey: Int? = null) {
                             if (group.key == focusGroupKey) MaterialTheme.colorScheme.inversePrimary else Color.Transparent
                         )
                         .clickable { setShowGroupItem(group) }
-                        .padding(10.dp, 6.dp),
+                        .itemPadding(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -154,7 +157,8 @@ fun GlobalRulePage(subsItemId: Long, focusGroupKey: Int? = null) {
                             maxLines = 1,
                             softWrap = false,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth(),
+                            style = MaterialTheme.typography.bodyLarge,
                         )
                         if (group.valid) {
                             if (!group.desc.isNullOrBlank()) {
@@ -164,21 +168,22 @@ fun GlobalRulePage(subsItemId: Long, focusGroupKey: Int? = null) {
                                     softWrap = false,
                                     overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.fillMaxWidth(),
-                                    fontSize = 14.sp
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             } else {
                                 Text(
                                     text = "暂无描述",
                                     modifier = Modifier.fillMaxWidth(),
-                                    fontSize = 14.sp,
-                                    color = LocalContentColor.current.copy(alpha = 0.5f)
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                                 )
                             }
                         } else {
                             Text(
                                 text = "非法选择器",
                                 modifier = Modifier.fillMaxWidth(),
-                                fontSize = 14.sp,
+                                style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.error
                             )
                         }
@@ -449,17 +454,21 @@ fun GlobalRulePage(subsItemId: Long, focusGroupKey: Int? = null) {
             modifier = Modifier.defaultMinSize(300.dp),
             onDismissRequest = { setShowGroupItem(null) },
             title = {
-                Text(text = showGroupItem.name)
+                Text(text = "规则组详情")
             },
             text = {
-                Text(text = showGroupItem.desc ?: "")
+                Column {
+                    Text(text = showGroupItem.name)
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(text = showGroupItem.desc ?: "")
+                }
             },
             confirmButton = {
                 if (showGroupItem.allExampleUrls.isNotEmpty()) {
                     TextButton(onClick = {
                         setShowGroupItem(null)
                         navController.navigate(
-                            GroupItemPageDestination(
+                            GroupImagePageDestination(
                                 subsInt = subsItemId,
                                 groupKey = showGroupItem.key
                             )

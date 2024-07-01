@@ -6,28 +6,36 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
+import com.blankj.utilcode.util.LogUtils
+import kotlinx.collections.immutable.persistentMapOf
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.collections.immutable.toImmutableMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import li.songe.gkd.app
 import li.songe.gkd.appScope
 import li.songe.gkd.data.AppInfo
 import li.songe.gkd.data.toAppInfo
 
-val appInfoCacheFlow = MutableStateFlow(emptyMap<String, AppInfo>().toImmutableMap())
+val appInfoCacheFlow = MutableStateFlow(persistentMapOf<String, AppInfo>().toImmutableMap())
 
-val systemAppInfoCacheFlow =
-    appInfoCacheFlow.map(appScope) { c -> c.filter { a -> a.value.isSystem }.toImmutableMap() }
+val systemAppInfoCacheFlow by lazy {
+    appInfoCacheFlow.map(appScope) { c ->
+        c.filter { a -> a.value.isSystem }.toImmutableMap()
+    }
+}
 
-val systemAppsFlow = systemAppInfoCacheFlow.map(appScope) { c -> c.keys }
+val systemAppsFlow by lazy { systemAppInfoCacheFlow.map(appScope) { c -> c.keys } }
 
-val orderedAppInfosFlow = appInfoCacheFlow.map(appScope) { c ->
-    c.values.sortedWith { a, b ->
-        collator.compare(a.name, b.name)
-    }.toImmutableList()
+val orderedAppInfosFlow by lazy {
+    appInfoCacheFlow.map(appScope) { c ->
+        c.values.sortedWith { a, b ->
+            collator.compare(a.name, b.name)
+        }.toImmutableList()
+    }
 }
 
 private val packageReceiver by lazy {
@@ -89,18 +97,29 @@ private fun updateAppInfo(appId: String) {
     }
 }
 
+val appRefreshingFlow = MutableStateFlow(false)
+
 suspend fun initOrResetAppInfoCache() {
     if (updateAppMutex.isLocked) return
+    LogUtils.d("initOrResetAppInfoCache start")
+    appRefreshingFlow.value = true
     updateAppMutex.withLock {
-        val appMap = mutableMapOf<String, AppInfo>()
-        app.packageManager.getInstalledPackages(0).forEach { packageInfo ->
-            val info = packageInfo.toAppInfo()
-            if (info != null) {
-                appMap[packageInfo.packageName] = info
+        val oldAppIds = appInfoCacheFlow.value.keys
+        val appMap = appInfoCacheFlow.value.toMutableMap()
+        withContext(Dispatchers.IO) {
+            app.packageManager.getInstalledPackages(0).forEach { packageInfo ->
+                if (!oldAppIds.contains(packageInfo.packageName)) {
+                    val info = packageInfo.toAppInfo()
+                    if (info != null) {
+                        appMap[packageInfo.packageName] = info
+                    }
+                }
             }
         }
         appInfoCacheFlow.value = appMap.toImmutableMap()
     }
+    appRefreshingFlow.value = false
+    LogUtils.d("initOrResetAppInfoCache end")
 }
 
 fun initAppState() {

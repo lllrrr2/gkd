@@ -2,87 +2,83 @@ package li.songe.gkd
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.blankj.utilcode.util.LogUtils
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import li.songe.gkd.data.RawSubscription
 import li.songe.gkd.data.SubsItem
 import li.songe.gkd.db.DbSet
-import li.songe.gkd.service.updateLauncherAppId
-import li.songe.gkd.util.appInfoCacheFlow
-import li.songe.gkd.util.authActionFlow
+import li.songe.gkd.permission.authReasonFlow
+import li.songe.gkd.util.LOCAL_SUBS_ID
 import li.songe.gkd.util.checkUpdate
-import li.songe.gkd.util.initFolder
-import li.songe.gkd.util.initOrResetAppInfoCache
+import li.songe.gkd.util.clearCache
 import li.songe.gkd.util.launchTry
-import li.songe.gkd.util.logZipDir
-import li.songe.gkd.util.newVersionApkDir
-import li.songe.gkd.util.snapshotZipDir
+import li.songe.gkd.util.map
 import li.songe.gkd.util.storeFlow
 import li.songe.gkd.util.updateSubscription
 
 class MainViewModel : ViewModel() {
     init {
-        // 在某些机型由于未知原因创建失败
-        // 在此保证每次重新打开APP都能重新检测创建
-        initFolder()
-
-        // 每次打开页面更新记录桌面 appId
-        updateLauncherAppId()
-
-        // https://github.com/gkd-kit/gkd/issues/543
         viewModelScope.launchTry(Dispatchers.IO) {
-            while (appInfoCacheFlow.value.size < 16) {
-                initOrResetAppInfoCache()
-                delay(10_000)
-            }
-        }
-
-        val localSubsItem = SubsItem(
-            id = -2, order = -2, mtime = System.currentTimeMillis()
-        )
-        viewModelScope.launchTry(Dispatchers.IO) {
-            val subsItems = DbSet.subsItemDao.query().first()
-            if (!subsItems.any { s -> s.id == localSubsItem.id }) {
+            val subsItems = DbSet.subsItemDao.queryAll()
+            if (!subsItems.any { s -> s.id == LOCAL_SUBS_ID }) {
                 updateSubscription(
                     RawSubscription(
-                        id = localSubsItem.id,
+                        id = LOCAL_SUBS_ID,
                         name = "本地订阅",
                         version = 0
                     )
                 )
-                DbSet.subsItemDao.insert(localSubsItem)
+                DbSet.subsItemDao.insert(
+                    SubsItem(
+                        id = LOCAL_SUBS_ID,
+                        order = subsItems.minByOrNull { it.order }?.order ?: 0,
+                    )
+                )
             }
         }
 
         viewModelScope.launchTry(Dispatchers.IO) {
             // 每次进入删除缓存
-            listOf(snapshotZipDir, newVersionApkDir, logZipDir).forEach { dir ->
-                if (dir.isDirectory && dir.exists()) {
-                    dir.listFiles()?.forEach { file ->
-                        if (file.isFile) {
-                            file.delete()
-                        }
-                    }
-                }
-            }
+            clearCache()
         }
 
         if (storeFlow.value.autoCheckAppUpdate) {
-            viewModelScope.launch {
+            appScope.launch {
                 try {
                     checkUpdate()
                 } catch (e: Exception) {
                     e.printStackTrace()
+                    LogUtils.d(e)
                 }
+            }
+        }
+
+        viewModelScope.launch {
+            storeFlow.map(viewModelScope) { s -> s.log2FileSwitch }.collect {
+                LogUtils.getConfig().isLog2FileSwitch = it
             }
         }
     }
 
+    val enableDarkThemeFlow = storeFlow.debounce(200).map { s -> s.enableDarkTheme }.stateIn(
+        viewModelScope,
+        SharingStarted.Eagerly,
+        storeFlow.value.enableDarkTheme
+    )
+    val enableDynamicColorFlow = storeFlow.debounce(300).map { s -> s.enableDynamicColor }.stateIn(
+        viewModelScope,
+        SharingStarted.Eagerly,
+        storeFlow.value.enableDynamicColor
+    )
+
 
     override fun onCleared() {
         super.onCleared()
-        authActionFlow.value = null
+        authReasonFlow.value = null
     }
 }

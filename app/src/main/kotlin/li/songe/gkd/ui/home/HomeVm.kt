@@ -202,16 +202,20 @@ class HomeVm @Inject constructor() : ViewModel() {
                     appInfos
                 }
             }
-        }.combine(debounceSearchStrFlow) { appInfos, debounceSearchStr ->
-            if (debounceSearchStr.isBlank()) {
+        }.combine(debounceSearchStrFlow) { appInfos, str ->
+            if (str.isBlank()) {
                 appInfos
             } else {
-                (appInfos.filter { a -> a.name.contains(debounceSearchStr) } + appInfos.filter { a ->
+                (appInfos.filter { a -> a.name.contains(str, true) } + appInfos.filter { a ->
                     a.id.contains(
-                        debounceSearchStr
+                        str,
+                        true
                     )
                 }).distinct()
             }
         }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
+
+    val clickLogCountFlow =
+        DbSet.clickLogDao.count().stateIn(viewModelScope, SharingStarted.Eagerly, 0)
 }

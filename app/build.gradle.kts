@@ -39,6 +39,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.parcelize)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.google.ksp)
     alias(libs.plugins.google.hilt)
     alias(libs.plugins.rikka.refine)
@@ -54,8 +55,8 @@ android {
         targetSdk = libs.versions.targetSdk.get().toInt()
 
         applicationId = "li.songe.gkd"
-        versionCode = 27
-        versionName = "1.7.2"
+        versionCode = 30
+        versionName = "1.8.0-beta.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -113,6 +114,7 @@ android {
             applicationIdSuffix = ".debug"
             resValue("string", "app_name", "GKD-debug")
             resValue("string", "capture_label", "捕获快照-debug")
+            resValue("string", "import_desc", "GKD-debug-导入数据")
         }
     }
     compileOptions {
@@ -132,28 +134,38 @@ android {
         compose = true
         aidl = true
     }
-    composeOptions {
-        kotlinCompilerExtensionVersion = libs.versions.composeCompiler.get()
-    }
     packagingOptions.resources.excludes += setOf(
         // https://github.com/Kotlin/kotlinx.coroutines/issues/2023
         "META-INF/**", "**/attach_hotspot_windows.dll",
 
-        "**.properties", "**.bin", "**/*.proto"
-    )
-    configurations.configureEach {
-        //    https://github.com/Kotlin/kotlinx.coroutines/issues/2023
-        exclude("org.jetbrains.kotlinx", "kotlinx-coroutines-debug")
-    }
+        "**.properties", "**.bin", "**/*.proto",
+        "**/kotlin-tooling-metadata.json",
 
-    ksp {
-        arg("room.schemaLocation", "$projectDir/schemas")
-        arg("room.incremental", "true")
-        arg("room.generateKotlin", "true")
-    }
+        // ktor
+        "**/custom.config.conf",
+        "**/custom.config.yaml",
+    )
     sourceSets.configureEach {
         kotlin.srcDir("${layout.buildDirectory.asFile.get()}/generated/ksp/$name/kotlin/")
     }
+}
+
+configurations.configureEach {
+    //    https://github.com/Kotlin/kotlinx.coroutines/issues/2023
+    exclude("org.jetbrains.kotlinx", "kotlinx-coroutines-debug")
+}
+
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+    arg("room.incremental", "true")
+    arg("room.generateKotlin", "true")
+}
+
+composeCompiler {
+    // https://developer.android.com/develop/ui/compose/performance/stability/strongskipping?hl=zh-cn
+    enableStrongSkippingMode = true
+    reportsDestination = layout.buildDirectory.dir("compose_compiler")
+    stabilityConfigurationFile = rootProject.layout.projectDirectory.file("stability_config.conf")
 }
 
 dependencies {
@@ -216,7 +228,7 @@ dependencies {
     ksp(libs.google.hilt.android.compiler)
     implementation(libs.androidx.hilt.navigation.compose)
 
-    implementation(libs.others.reorderable)
+    implementation(libs.reorderable)
 
     implementation(libs.androidx.splashscreen)
 
@@ -226,4 +238,5 @@ dependencies {
     implementation(libs.exp4j)
 
     implementation(libs.toaster)
+    implementation(libs.permissions)
 }

@@ -22,8 +22,6 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LocalContentColor
-import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -42,6 +40,7 @@ import com.google.accompanist.drawablepainter.rememberDrawablePainter
 import li.songe.gkd.data.AppInfo
 import li.songe.gkd.data.RawSubscription
 import li.songe.gkd.data.SubsConfig
+import li.songe.gkd.ui.style.appItemPadding
 import li.songe.gkd.util.encodeToJson5String
 import li.songe.gkd.util.json
 import li.songe.gkd.util.toast
@@ -65,7 +64,7 @@ fun SubsAppCard(
                 onClick?.invoke()
             }
             .height(IntrinsicSize.Min)
-            .padding(10.dp, 6.dp),
+            .appItemPadding(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -109,7 +108,7 @@ fun SubsAppCard(
                 softWrap = false,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.fillMaxWidth(),
-                style = LocalTextStyle.current.let {
+                style = MaterialTheme.typography.bodyLarge.let {
                     if (appInfo?.isSystem == true) {
                         it.copy(textDecoration = TextDecoration.Underline)
                     } else {
@@ -129,13 +128,16 @@ fun SubsAppCard(
                     maxLines = 1,
                     softWrap = false,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
                 Text(
                     text = "暂无规则",
                     modifier = Modifier.fillMaxWidth(),
-                    color = LocalContentColor.current.copy(alpha = 0.5f)
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
                 )
             }
         }

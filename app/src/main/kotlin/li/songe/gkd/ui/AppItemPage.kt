@@ -27,7 +27,6 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -61,19 +60,24 @@ import com.blankj.utilcode.util.LogUtils
 import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootNavGraph
 import kotlinx.coroutines.Dispatchers
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.jsonObject
 import li.songe.gkd.data.ExcludeData
 import li.songe.gkd.data.RawSubscription
 import li.songe.gkd.data.SubsConfig
 import li.songe.gkd.data.stringify
 import li.songe.gkd.db.DbSet
+import li.songe.gkd.ui.component.TowLineText
 import li.songe.gkd.ui.component.getDialogResult
-import li.songe.gkd.ui.destinations.GroupItemPageDestination
+import li.songe.gkd.ui.destinations.GroupImagePageDestination
+import li.songe.gkd.ui.style.itemPadding
 import li.songe.gkd.util.LocalNavController
 import li.songe.gkd.util.ProfileTransitions
 import li.songe.gkd.util.appInfoCacheFlow
 import li.songe.gkd.util.encodeToJson5String
 import li.songe.gkd.util.getGroupRawEnable
 import li.songe.gkd.util.json
+import li.songe.gkd.util.json5ToJson
 import li.songe.gkd.util.launchAsFn
 import li.songe.gkd.util.launchTry
 import li.songe.gkd.util.navigate
@@ -129,16 +133,9 @@ fun AppItemPage(
                 )
             }
         }, title = {
-            val text = if (subsRaw == null) {
-                "订阅文件缺失"
-            } else {
-                "${appInfoCache[appId]?.name ?: appRaw.name ?: appId}/${subsRaw.name}"
-            }
-            Text(
-                text = text,
-                maxLines = 1,
-                softWrap = false,
-                overflow = TextOverflow.Ellipsis,
+            TowLineText(
+                title = subsRaw?.name ?: subsItemId.toString(),
+                subTitle = appInfoCache[appId]?.name ?: appRaw.name ?: appId
             )
         }, actions = {})
     }, floatingActionButton = {
@@ -166,7 +163,7 @@ fun AppItemPage(
                             if (group.key == focusGroupKey) MaterialTheme.colorScheme.inversePrimary else Color.Transparent
                         )
                         .clickable { setShowGroupItem(group) }
-                        .padding(10.dp, 6.dp),
+                        .itemPadding(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -181,7 +178,8 @@ fun AppItemPage(
                             maxLines = 1,
                             softWrap = false,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth(),
+                            style = MaterialTheme.typography.bodyLarge,
                         )
                         if (group.valid) {
                             if (!group.desc.isNullOrBlank()) {
@@ -191,21 +189,22 @@ fun AppItemPage(
                                     softWrap = false,
                                     overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.fillMaxWidth(),
-                                    fontSize = 14.sp
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             } else {
                                 Text(
                                     text = "暂无描述",
                                     modifier = Modifier.fillMaxWidth(),
-                                    fontSize = 14.sp,
-                                    color = LocalContentColor.current.copy(alpha = 0.5f)
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                                 )
                             }
                         } else {
                             Text(
                                 text = "非法选择器",
                                 modifier = Modifier.fillMaxWidth(),
-                                fontSize = 14.sp,
+                                style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.error
                             )
                         }
@@ -343,20 +342,25 @@ fun AppItemPage(
     }
 
     showGroupItem?.let { showGroupItemVal ->
-        AlertDialog(modifier = Modifier.defaultMinSize(300.dp),
+        AlertDialog(
+            modifier = Modifier.defaultMinSize(300.dp),
             onDismissRequest = { setShowGroupItem(null) },
             title = {
-                Text(text = showGroupItemVal.name)
+                Text(text = "规则组详情")
             },
             text = {
-                Text(text = showGroupItemVal.desc ?: "")
+                Column {
+                    Text(text = showGroupItemVal.name)
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(text = showGroupItemVal.desc ?: "")
+                }
             },
             confirmButton = {
                 if (showGroupItemVal.allExampleUrls.isNotEmpty()) {
                     TextButton(onClick = {
                         setShowGroupItem(null)
                         navController.navigate(
-                            GroupItemPageDestination(
+                            GroupImagePageDestination(
                                 subsInt = subsItemId,
                                 groupKey = showGroupItemVal.key,
                                 appId = appId,
@@ -398,29 +402,40 @@ fun AppItemPage(
                 }
             },
             confirmButton = {
-                TextButton(onClick = {
+                TextButton(onClick = vm.viewModelScope.launchAsFn(Dispatchers.Default) {
                     if (oldSource == source) {
-                        toast("规则无变动")
+                        toast("规则组无变动")
                         setEditGroupRaw(null)
-                        return@TextButton
+                        return@launchAsFn
                     }
-                    val newGroupRaw = try {
-                        RawSubscription.parseRawGroup(source)
+                    val element = try {
+                        json.parseToJsonElement(json5ToJson(source)).jsonObject
                     } catch (e: Exception) {
                         LogUtils.d(e)
-                        toast("非法规则:${e.message}")
-                        return@TextButton
+                        error("非法JSON:${e.message}")
+                    }
+                    val newGroupRaw = try {
+                        if (element["groups"] is JsonArray) {
+                            RawSubscription.parseApp(element).groups.let {
+                                it.find { g -> g.key == editGroupRaw.key } ?: it.firstOrNull()
+                            }
+                        } else {
+                            null
+                        } ?: RawSubscription.parseGroup(element)
+                    } catch (e: Exception) {
+                        LogUtils.d(e)
+                        error("非法规则:${e.message}")
                     }
                     if (newGroupRaw.key != editGroupRaw.key) {
                         toast("不能更改规则组的key")
-                        return@TextButton
+                        return@launchAsFn
                     }
                     if (newGroupRaw.errorDesc != null) {
                         toast(newGroupRaw.errorDesc!!)
-                        return@TextButton
+                        return@launchAsFn
                     }
                     setEditGroupRaw(null)
-                    subsRaw ?: return@TextButton
+                    subsRaw ?: return@launchAsFn
                     val newSubsRaw = subsRaw.copy(apps = subsRaw.apps.toMutableList().apply {
                         set(
                             indexOfFirst { a -> a.id == appRaw.id },
@@ -431,11 +446,9 @@ fun AppItemPage(
                             })
                         )
                     })
-                    vm.viewModelScope.launchTry(Dispatchers.IO) {
-                        updateSubscription(newSubsRaw)
-                        DbSet.subsItemDao.update(subsItem.copy(mtime = System.currentTimeMillis()))
-                        toast("更新成功")
-                    }
+                    updateSubscription(newSubsRaw)
+                    DbSet.subsItemDao.update(subsItem.copy(mtime = System.currentTimeMillis()))
+                    toast("更新成功")
                 }, enabled = source.isNotEmpty()) {
                     Text(text = "更新")
                 }

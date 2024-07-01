@@ -1,8 +1,6 @@
 package li.songe.gkd.ui
 
-import android.Manifest
 import android.graphics.Bitmap
-import android.os.Build
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
@@ -40,7 +38,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -50,7 +47,6 @@ import androidx.lifecycle.viewModelScope
 import com.blankj.utilcode.util.ClipboardUtils
 import com.blankj.utilcode.util.ImageUtils
 import com.blankj.utilcode.util.UriUtils
-import com.dylanc.activityresult.launcher.launchForResult
 import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootNavGraph
 import kotlinx.coroutines.CancellationException
@@ -59,14 +55,15 @@ import kotlinx.coroutines.withContext
 import li.songe.gkd.data.Snapshot
 import li.songe.gkd.db.DbSet
 import li.songe.gkd.debug.SnapshotExt
+import li.songe.gkd.permission.canSaveToAlbumState
+import li.songe.gkd.permission.checkOrRequestPermission
+import li.songe.gkd.ui.component.StartEllipsisText
 import li.songe.gkd.ui.destinations.ImagePreviewPageDestination
 import li.songe.gkd.util.IMPORT_BASE_URL
 import li.songe.gkd.util.LoadStatus
 import li.songe.gkd.util.LocalNavController
 import li.songe.gkd.util.LocalPickContentLauncher
-import li.songe.gkd.util.LocalRequestPermissionLauncher
 import li.songe.gkd.util.ProfileTransitions
-import li.songe.gkd.util.format
 import li.songe.gkd.util.launchAsFn
 import li.songe.gkd.util.navigate
 import li.songe.gkd.util.shareFile
@@ -83,7 +80,6 @@ fun SnapshotPage() {
     val colorScheme = MaterialTheme.colorScheme
 
     val pickContentLauncher = LocalPickContentLauncher.current
-    val requestPermissionLauncher = LocalRequestPermissionLauncher.current
 
     val vm = hiltViewModel<SnapshotVm>()
     val snapshots by vm.snapshotsState.collectAsState()
@@ -134,8 +130,7 @@ fun SnapshotPage() {
                     .padding(10.dp)) {
                     Row {
                         Text(
-                            text = snapshot.id.format("MM-dd HH:mm:ss"),
-                            fontFamily = FontFamily.Monospace
+                            text = snapshot.date,
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
@@ -155,10 +150,7 @@ fun SnapshotPage() {
                                 snapshot.activityId
                             }
                         Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = showActivityId, overflow = TextOverflow.Ellipsis,
-                            maxLines = 1,
-                        )
+                        StartEllipsisText(text = showActivityId)
                     }
                 }
                 HorizontalDivider()
@@ -244,13 +236,8 @@ fun SnapshotPage() {
                     text = "保存截图到相册",
                     modifier = Modifier
                         .clickable(onClick = vm.viewModelScope.launchAsFn {
-                            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-                                val isGranted =
-                                    requestPermissionLauncher.launchForResult(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-                                if (!isGranted) {
-                                    toast("保存失败,暂无权限")
-                                    return@launchAsFn
-                                }
+                            if (!checkOrRequestPermission(context, canSaveToAlbumState)) {
+                                return@launchAsFn
                             }
                             ImageUtils.save2Album(
                                 ImageUtils.getBitmap(snapshotVal.screenshotFile),

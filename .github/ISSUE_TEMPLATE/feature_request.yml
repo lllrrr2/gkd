@@ -1,6 +1,8 @@
-name: New feature proposal
-description: Propose a new feature to be added to GKD
-labels: ['enhancement: pending triage']
+name: 功能请求 / Feature request
+title: "[Feature] "
+description: 提出你的功能请求 / Propose your feature request
+labels: ["enhancement"]
+
 body:
   - type: markdown
     attributes:
@@ -12,16 +14,15 @@ body:
       label: 一些验证
       description: 在提交问题之前，请确保您完成以下操作
       options:
-        - label: 搜索检查是否已经存在请求相同功能的问题/讨论，以避免重复创建问题
+        - label: GKD 默认不提供任何规则, 你可以查看 [GKD 官方文档](https://gkd.li) 后自行编写规则或者导入远程订阅, 请不要再提出类似想要XXX规则这种问题 
           required: true
-        - label: |
-            检查这个问题是属于 [规则](https://github.com/gkd-kit/subscription) 还是属于 GKD 本身, 也许你应该去 [subscription/issues](https://github.com/gkd-kit/subscription/issues) 提交问题
+        - label: 请 **确保** 您已经查阅了 [GKD 官方文档](https://gkd.li) 以及 [常见问题](https://gkd.li/faq/)
           required: true
-        - label: 1.我确认知晓并同意维护者直接关闭不符合 issue 规范的问题
+        - label: 请 **确保** [已有的问题](https://github.com/gkd-kit/gkd/issues?q=is%3Aissue) 中没有人提交过相似issue，否则请在已有的issue下进行讨论
           required: true
-        - label: 2.我确认知晓并同意维护者直接关闭不符合 issue 规范的问题
+        - label: 请 **务必** 给issue填写一个简洁明了的标题，以便他人快速检索
           required: true
-        - label: 3.我确认知晓并同意维护者直接关闭不符合 issue 规范的问题
+        - label: 请 **确保** 你想要的功能在 [releases](https://github.com/gkd-kit/gkd/releases/latest) 发布的最新版本(包含测试版本)上没有找到 (如果不是请先更新到最新版本验证后再提交问题)
           required: true
   - type: textarea
     id: feature-description

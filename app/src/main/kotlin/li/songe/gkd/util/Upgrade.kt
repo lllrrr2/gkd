@@ -15,6 +15,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.blankj.utilcode.util.AppUtils
+import com.blankj.utilcode.util.NetworkUtils
 import io.ktor.client.call.body
 import io.ktor.client.plugins.onDownload
 import io.ktor.client.request.get
@@ -25,6 +26,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import li.songe.gkd.BuildConfig
 import li.songe.gkd.appScope
@@ -53,6 +55,10 @@ val newVersionFlow by lazy { MutableStateFlow<NewVersion?>(null) }
 val downloadStatusFlow by lazy { MutableStateFlow<LoadStatus<String>?>(null) }
 suspend fun checkUpdate(): NewVersion? {
     if (checkUpdatingFlow.value) return null
+    val isAvailable = withContext(Dispatchers.IO) { NetworkUtils.isAvailable() }
+    if (!isAvailable) {
+        error("网络不可用")
+    }
     checkUpdatingFlow.value = true
     try {
         val newVersion = client.get(UPDATE_URL).body<NewVersion>()

@@ -12,7 +12,9 @@ import androidx.room.Query
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 import kotlinx.parcelize.Parcelize
+import kotlinx.serialization.Serializable
 
+@Serializable
 @Entity(
     tableName = "subs_config",
 )
@@ -42,11 +44,17 @@ data class SubsConfig(
         @Insert(onConflict = OnConflictStrategy.REPLACE)
         suspend fun insert(vararg users: SubsConfig): List<Long>
 
+        @Insert(onConflict = OnConflictStrategy.IGNORE)
+        suspend fun insertOrIgnore(vararg users: SubsConfig): List<Long>
+
         @Delete
         suspend fun delete(vararg users: SubsConfig): Int
 
         @Query("DELETE FROM subs_config WHERE subs_item_id=:subsItemId")
         suspend fun delete(subsItemId: Long): Int
+
+        @Query("DELETE FROM subs_config WHERE subs_item_id IN (:subsIds)")
+        suspend fun deleteBySubsId(vararg subsIds: Long): Int
 
         @Query("DELETE FROM subs_config WHERE subs_item_id=:subsItemId AND app_id=:appId")
         suspend fun delete(subsItemId: Long, appId: String): Int
@@ -54,9 +62,8 @@ data class SubsConfig(
         @Query("DELETE FROM subs_config WHERE subs_item_id=:subsItemId AND app_id=:appId AND group_key=:groupKey")
         suspend fun delete(subsItemId: Long, appId: String, groupKey: Int): Int
 
-        @Query("SELECT * FROM subs_config")
-        fun query(): Flow<List<SubsConfig>>
-
+        @Query("SELECT * FROM subs_config WHERE subs_item_id IN (SELECT si.id FROM subs_item si WHERE si.enable = 1)")
+        fun queryUsedList(): Flow<List<SubsConfig>>
 
         @Query("SELECT * FROM subs_config WHERE type=${AppType} AND subs_item_id=:subsItemId")
         fun queryAppTypeConfig(subsItemId: Long): Flow<List<SubsConfig>>
@@ -77,6 +84,10 @@ data class SubsConfig(
 
         @Query("SELECT * FROM subs_config WHERE type=${GlobalGroupType} AND subs_item_id=:subsItemId AND group_key=:groupKey")
         fun queryGlobalGroupTypeConfig(subsItemId: Long, groupKey: Int): Flow<List<SubsConfig>>
+
+        @Query("SELECT * FROM subs_config WHERE subs_item_id IN (:subsItemIds) ")
+        suspend fun querySubsItemConfig(subsItemIds: List<Long>): List<SubsConfig>
+
     }
 
 }

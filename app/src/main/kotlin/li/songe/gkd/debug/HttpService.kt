@@ -30,17 +30,21 @@ import kotlinx.serialization.Serializable
 import li.songe.gkd.app
 import li.songe.gkd.appScope
 import li.songe.gkd.composition.CompositionService
+import li.songe.gkd.data.AppInfo
 import li.songe.gkd.data.DeviceInfo
 import li.songe.gkd.data.GkdAction
 import li.songe.gkd.data.RawSubscription
 import li.songe.gkd.data.RpcError
 import li.songe.gkd.data.SubsItem
+import li.songe.gkd.data.deleteSubscription
+import li.songe.gkd.data.selfAppInfo
 import li.songe.gkd.db.DbSet
 import li.songe.gkd.debug.SnapshotExt.captureSnapshot
 import li.songe.gkd.notif.createNotif
 import li.songe.gkd.notif.httpChannel
 import li.songe.gkd.notif.httpNotif
 import li.songe.gkd.service.GkdAbService
+import li.songe.gkd.util.LOCAL_HTTP_SUBS_ID
 import li.songe.gkd.util.SERVER_SCRIPT_URL
 import li.songe.gkd.util.getIpAddressInLocalNetwork
 import li.songe.gkd.util.keepNullJson
@@ -58,7 +62,7 @@ class HttpService : CompositionService({
     val scope = CoroutineScope(Dispatchers.IO)
 
     val httpSubsItem = SubsItem(
-        id = -1L,
+        id = LOCAL_HTTP_SUBS_ID,
         order = -1,
         enableUpdate = false,
     )
@@ -72,7 +76,12 @@ class HttpService : CompositionService({
             routing {
                 get("/") { call.respondText(ContentType.Text.Html) { "<script type='module' src='$SERVER_SCRIPT_URL'></script>" } }
                 route("/api") {
+                    // Deprecated
                     get("/device") { call.respond(DeviceInfo.instance) }
+
+                    post("/getServerInfo") { call.respond(ServerInfo()) }
+
+                    // Deprecated
                     get("/snapshot") {
                         val id = call.request.queryParameters["id"]?.toLongOrNull()
                             ?: throw RpcError("miss id")
@@ -82,6 +91,16 @@ class HttpService : CompositionService({
                         }
                         call.respondFile(fp)
                     }
+                    post("/getSnapshot") {
+                        val data = call.receive<ReqId>()
+                        val fp = File(SnapshotExt.getSnapshotPath(data.id))
+                        if (!fp.exists()) {
+                            throw RpcError("对应快照不存在")
+                        }
+                        call.respond(fp)
+                    }
+
+                    // Deprecated
                     get("/screenshot") {
                         val id = call.request.queryParameters["id"]?.toLongOrNull()
                             ?: throw RpcError("miss id")
@@ -91,28 +110,43 @@ class HttpService : CompositionService({
                         }
                         call.respondFile(fp)
                     }
+                    post("/getScreenshot") {
+                        val data = call.receive<ReqId>()
+                        val fp = File(SnapshotExt.getScreenshotPath(data.id))
+                        if (!fp.exists()) {
+                            throw RpcError("对应截图不存在")
+                        }
+                        call.respondFile(fp)
+                    }
+
+                    // Deprecated
                     get("/captureSnapshot") {
                         call.respond(captureSnapshot())
                     }
+                    post("/captureSnapshot") {
+                        call.respond(captureSnapshot())
+                    }
+
+                    // Deprecated
                     get("/snapshots") {
                         call.respond(DbSet.snapshotDao.query().first())
                     }
+                    post("/getSnapshots") {
+                        call.respond(DbSet.snapshotDao.query().first())
+                    }
+
                     post("/updateSubscription") {
                         val subscription =
                             RawSubscription.parse(call.receiveText(), json5 = false)
                                 .copy(
-                                    id = -1,
+                                    id = LOCAL_HTTP_SUBS_ID,
                                     name = "内存订阅",
                                     version = 0,
                                     author = "@gkd-kit/inspect"
                                 )
-                        try {
-                            updateSubscription(subscription)
-                            DbSet.subsItemDao.insert((subsItemsFlow.value.find { s -> s.id == httpSubsItem.id }
-                                ?: httpSubsItem).copy(mtime = System.currentTimeMillis()))
-                        } catch (e: Exception) {
-                            throw RpcError(e.message ?: "未知")
-                        }
+                        updateSubscription(subscription)
+                        DbSet.subsItemDao.insert((subsItemsFlow.value.find { s -> s.id == httpSubsItem.id }
+                            ?: httpSubsItem).copy(mtime = System.currentTimeMillis()))
                         call.respond(RpcOk())
                     }
                     post("/execSelector") {
@@ -155,7 +189,7 @@ class HttpService : CompositionService({
         scope.launchTry(Dispatchers.IO) {
             server?.stop()
             if (storeFlow.value.autoClearMemorySubs) {
-                httpSubsItem.removeAssets()
+                deleteSubscription(LOCAL_HTTP_SUBS_ID)
             }
             delay(3000)
             scope.cancel()
@@ -188,17 +222,24 @@ data class RpcOk(
     val message: String? = null,
 )
 
+@Serializable
+data class ReqId(
+    val id: Long,
+)
+
+@Serializable
+data class ServerInfo(
+    val device: DeviceInfo = DeviceInfo.instance,
+    val gkdAppInfo: AppInfo = selfAppInfo
+)
+
 fun clearHttpSubs() {
     // 如果 app 被直接在任务列表划掉, HTTP订阅会没有清除, 所以在后续的第一次启动时清除
     if (HttpService.isRunning.value) return
     appScope.launchTry(Dispatchers.IO) {
         delay(1000)
         if (storeFlow.value.autoClearMemorySubs) {
-            SubsItem(
-                id = -1L,
-                order = -1,
-                enableUpdate = false,
-            ).removeAssets()
+            deleteSubscription(LOCAL_HTTP_SUBS_ID)
         }
     }
 }

@@ -1,6 +1,5 @@
 package li.songe.gkd.ui.home
 
-import android.webkit.URLUtil
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -14,11 +13,25 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.viewModelScope
 import com.blankj.utilcode.util.LogUtils
+import com.blankj.utilcode.util.UriUtils
 import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootNavGraph
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import li.songe.gkd.MainActivity
+import li.songe.gkd.OpenFileActivity
+import li.songe.gkd.OpenSchemeActivity
+import li.songe.gkd.data.TransferData
+import li.songe.gkd.data.importTransferData
 import li.songe.gkd.util.ProfileTransitions
+import li.songe.gkd.util.checkSubsUpdate
+import li.songe.gkd.util.json
+import li.songe.gkd.util.launchTry
+import li.songe.gkd.util.readFileZipByteArray
+import li.songe.gkd.util.toast
 
 data class BottomNavItem(
     val label: String,
@@ -33,18 +46,6 @@ fun HomePage() {
     val vm = hiltViewModel<HomeVm>()
     val tab by vm.tabFlow.collectAsState()
 
-    val intent = context.intent
-    LaunchedEffect(key1 = intent, block = {
-        if (intent != null) {
-            context.intent = null
-            val data = intent.data
-            val url = data?.getQueryParameter("url")
-            if (data?.scheme == "gkd" && data.host == "import" && URLUtil.isNetworkUrl(url)) {
-                LogUtils.d(data, url)
-            }
-        }
-    })
-
     val controlPage = useControlPage()
     val subsPage = useSubsManagePage()
     val appListPage = useAppListPage()
@@ -52,8 +53,42 @@ fun HomePage() {
 
     val pages = arrayOf(controlPage, subsPage, appListPage, settingsPage)
 
-    val currentPage = pages.find { p -> p.navItem === tab }
+    val currentPage = pages.find { p -> p.navItem.label == tab.label }
         ?: controlPage
+
+    val intent = context.intent
+    LaunchedEffect(key1 = intent, block = {
+        intent ?: return@LaunchedEffect
+        context.intent = null
+        LogUtils.d(intent)
+        val uri = intent.data ?: return@LaunchedEffect
+        val source = intent.getStringExtra("source")
+        if (source == OpenFileActivity::class.qualifiedName) {
+            vm.viewModelScope.launchTry(Dispatchers.IO) {
+                toast("加载导入...")
+                vm.tabFlow.value = subsPage.navItem
+                val string = readFileZipByteArray(
+                    UriUtils.uri2Bytes(uri),
+                    "${TransferData.TYPE}.json"
+                )
+                if (string != null) {
+                    val transferData = withContext(Dispatchers.Default) {
+                        json.decodeFromString<TransferData>(string)
+                    }
+                    val hasNewSubsItem = importTransferData(transferData)
+                    toast("导入成功")
+                    if (hasNewSubsItem) {
+                        delay(1000)
+                        checkSubsUpdate(true)
+                    }
+                } else {
+                    toast("导入失败")
+                }
+            }
+        } else if (source == OpenSchemeActivity::class.qualifiedName) {
+            LogUtils.d(uri)
+        }
+    })
 
     Scaffold(
         modifier = currentPage.modifier,
@@ -63,7 +98,7 @@ fun HomePage() {
             NavigationBar {
                 pages.forEach { page ->
                     NavigationBarItem(
-                        selected = tab == page.navItem,
+                        selected = tab.label == page.navItem.label,
                         modifier = Modifier,
                         onClick = {
                             vm.tabFlow.value = page.navItem
@@ -76,7 +111,8 @@ fun HomePage() {
                         },
                         label = {
                             Text(text = page.navItem.label)
-                        })
+                        }
+                    )
                 }
             }
         },

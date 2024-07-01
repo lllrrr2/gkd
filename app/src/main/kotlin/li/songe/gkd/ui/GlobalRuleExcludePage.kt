@@ -28,10 +28,9 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
@@ -70,6 +69,9 @@ import li.songe.gkd.data.stringify
 import li.songe.gkd.db.DbSet
 import li.songe.gkd.service.launcherAppId
 import li.songe.gkd.ui.component.AppBarTextField
+import li.songe.gkd.ui.component.TowLineText
+import li.songe.gkd.ui.style.appItemPadding
+import li.songe.gkd.ui.style.menuPadding
 import li.songe.gkd.util.LocalNavController
 import li.songe.gkd.util.ProfileTransitions
 import li.songe.gkd.util.SortTypeOption
@@ -128,11 +130,9 @@ fun GlobalRuleExcludePage(subsItemId: Long, groupKey: Int) {
                     modifier = Modifier.focusRequester(focusRequester)
                 )
             } else {
-                Text(
-                    text = "${rawSubs?.name ?: subsItemId}/${group?.name ?: groupKey}",
-                    maxLines = 1,
-                    softWrap = false,
-                    overflow = TextOverflow.Ellipsis,
+                TowLineText(
+                    title = rawSubs?.name ?: subsItemId.toString(),
+                    subTitle = (group?.name ?: groupKey.toString())
                 )
             }
         }, actions = {
@@ -174,38 +174,45 @@ fun GlobalRuleExcludePage(subsItemId: Long, groupKey: Int) {
                         expanded = expanded,
                         onDismissRequest = { expanded = false }
                     ) {
+                        Text(
+                            text = "排序",
+                            modifier = Modifier.menuPadding(),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
                         SortTypeOption.allSubObject.forEach { sortOption ->
                             DropdownMenuItem(
                                 text = {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        RadioButton(selected = sortType == sortOption,
-                                            onClick = {
-                                                vm.sortTypeFlow.value = sortOption
-                                            }
-                                        )
-                                        Text(sortOption.label)
-                                    }
+                                    Text(sortOption.label)
+                                },
+                                trailingIcon = {
+                                    RadioButton(selected = sortType == sortOption,
+                                        onClick = {
+                                            vm.sortTypeFlow.value = sortOption
+                                        }
+                                    )
                                 },
                                 onClick = {
                                     vm.sortTypeFlow.value = sortOption
                                 },
                             )
                         }
-                        HorizontalDivider()
+                        Text(
+                            text = "选项",
+                            modifier = Modifier.menuPadding(),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
                         DropdownMenuItem(
                             text = {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Checkbox(
-                                        checked = showSystemApp,
-                                        onCheckedChange = {
-                                            vm.showSystemAppFlow.value = !vm.showSystemAppFlow.value
-                                        })
-                                    Text("显示系统应用")
-                                }
+                                Text("显示系统应用")
+                            },
+                            trailingIcon = {
+                                Checkbox(
+                                    checked = showSystemApp,
+                                    onCheckedChange = {
+                                        vm.showSystemAppFlow.value = !vm.showSystemAppFlow.value
+                                    })
                             },
                             onClick = {
                                 vm.showSystemAppFlow.value = !vm.showSystemAppFlow.value
@@ -239,7 +246,7 @@ fun GlobalRuleExcludePage(subsItemId: Long, groupKey: Int) {
                 Row(
                     modifier = Modifier
                         .height(IntrinsicSize.Min)
-                        .padding(10.dp, 6.dp),
+                        .appItemPadding(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -283,7 +290,7 @@ fun GlobalRuleExcludePage(subsItemId: Long, groupKey: Int) {
                             softWrap = false,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.fillMaxWidth(),
-                            style = LocalTextStyle.current.let {
+                            style = MaterialTheme.typography.bodyLarge.let {
                                 if (appInfo.isSystem) {
                                     it.copy(textDecoration = TextDecoration.Underline)
                                 } else {
@@ -296,7 +303,9 @@ fun GlobalRuleExcludePage(subsItemId: Long, groupKey: Int) {
                             maxLines = 1,
                             softWrap = false,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth(),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
 
@@ -304,29 +313,33 @@ fun GlobalRuleExcludePage(subsItemId: Long, groupKey: Int) {
 
                     if (group != null) {
                         val checked = getChecked(excludeData, group, appInfo.id, appInfo)
-                        Switch(
-                            checked = checked ?: false,
-                            onCheckedChange = {
-                                if (checked == null) {
-                                    toast("内置禁用,不可修改")
-                                    return@Switch
-                                }
-                                vm.viewModelScope.launchTry {
-                                    val subsConfig = (vm.subsConfigFlow.value ?: SubsConfig(
-                                        type = SubsConfig.GlobalGroupType,
-                                        subsItemId = subsItemId,
-                                        groupKey = groupKey,
-                                    )).copy(
-                                        exclude = excludeData.copy(
-                                            appIds = excludeData.appIds.toMutableMap().apply {
-                                                set(appInfo.id, !it)
-                                            })
-                                            .stringify()
-                                    )
-                                    DbSet.subsConfigDao.insert(subsConfig)
-                                }
-                            },
-                        )
+                        if (checked != null) {
+                            Switch(
+                                checked = checked,
+                                onCheckedChange = {
+                                    vm.viewModelScope.launchTry {
+                                        val subsConfig = (vm.subsConfigFlow.value ?: SubsConfig(
+                                            type = SubsConfig.GlobalGroupType,
+                                            subsItemId = subsItemId,
+                                            groupKey = groupKey,
+                                        )).copy(
+                                            exclude = excludeData.copy(
+                                                appIds = excludeData.appIds.toMutableMap().apply {
+                                                    set(appInfo.id, !it)
+                                                })
+                                                .stringify()
+                                        )
+                                        DbSet.subsConfigDao.insert(subsConfig)
+                                    }
+                                },
+                            )
+                        } else {
+                            Switch(
+                                enabled = false,
+                                checked = false,
+                                onCheckedChange = {},
+                            )
+                        }
                     }
                 }
             }
