@@ -12,6 +12,7 @@ import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.Serializable
 import li.songe.gkd.debug.SnapshotExt
+import li.songe.gkd.util.format
 import java.io.File
 
 @Entity(
@@ -24,7 +25,7 @@ data class Snapshot(
     @ColumnInfo(name = "app_id") override val appId: String?,
     @ColumnInfo(name = "activity_id") override val activityId: String?,
     @ColumnInfo(name = "app_name") override val appName: String?,
-    @ColumnInfo(name = "app_version_code") override val appVersionCode: Int?,
+    @ColumnInfo(name = "app_version_code") override val appVersionCode: Long?,
     @ColumnInfo(name = "app_version_name") override val appVersionName: String?,
 
     @ColumnInfo(name = "screen_height") override val screenHeight: Int,
@@ -34,6 +35,8 @@ data class Snapshot(
     @ColumnInfo(name = "github_asset_id") val githubAssetId: Int? = null,
 
     ) : BaseSnapshot {
+
+    val date by lazy { id.format("MM-dd HH:mm:ss") }
 
     val screenshotFile by lazy {
         File(
@@ -60,11 +63,14 @@ data class Snapshot(
         @Delete
         suspend fun delete(vararg users: Snapshot): Int
 
-        @Query("SELECT * FROM snapshot")
+        @Query("SELECT * FROM snapshot ORDER BY id DESC")
         fun query(): Flow<List<Snapshot>>
 
         @Query("UPDATE snapshot SET github_asset_id=null WHERE id = :id")
         suspend fun deleteGithubAssetId(id: Long)
+
+        @Query("SELECT COUNT(*) FROM snapshot")
+        fun count(): Flow<Int>
     }
 }
 

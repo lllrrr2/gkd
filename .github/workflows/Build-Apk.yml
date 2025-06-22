@@ -8,43 +8,42 @@ on:
       - '**'
     paths-ignore:
       - 'LICENSE'
-      - 'README.md'
+      - '*.md'
       - '.github/**'
 
 jobs:
   build:
-    if: ${{ !startsWith(github.event.head_commit.message, 'chore:') }}
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore:') && !startsWith(github.event.head_commit.message, 'chore(') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v3
+      - uses: actions/setup-java@v4
         with:
           distribution: 'adopt'
           java-version: '17'
 
-      - name: write secrets info
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-encryption-key: ${{ secrets.GRADLE_CACHE_ENCRYPTION_KEY }}
+
+      - name: write gkd secrets info
         run: |
-          echo ${{ secrets.GKD_STORE_FILE_BASE64 }} | base64 --decode > ${{ github.workspace }}/key.jks
-          echo GKD_STORE_FILE='${{ github.workspace }}/key.jks' >> gradle.properties
+          echo ${{ secrets.GKD_STORE_FILE_BASE64 }} | base64 --decode > ${{ github.workspace }}/gkd.jks
+          echo GKD_STORE_FILE='${{ github.workspace }}/gkd.jks' >> gradle.properties
           echo GKD_STORE_PASSWORD='${{ secrets.GKD_STORE_PASSWORD }}' >> gradle.properties
           echo GKD_KEY_ALIAS='${{ secrets.GKD_KEY_ALIAS }}' >> gradle.properties
           echo GKD_KEY_PASSWORD='${{ secrets.GKD_KEY_PASSWORD }}' >> gradle.properties
 
       - run: chmod 777 ./gradlew
-      - run: ./gradlew app:assemble
+      - run: ./gradlew app:assembleGkd
 
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: outputs
           path: app/build/outputs
 
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: release
-          path: app/build/outputs/apk/release
-
-      - uses: actions/upload-artifact@v3
-        with:
-          name: debug
-          path: app/build/outputs/apk/debug
+          path: app/build/outputs/apk/gkd/release

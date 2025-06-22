@@ -8,13 +8,15 @@ import android.view.ViewConfiguration
 import android.view.accessibility.AccessibilityNodeInfo
 import com.blankj.utilcode.util.ScreenUtils
 import kotlinx.serialization.Serializable
+import li.songe.gkd.shizuku.safeLongTap
+import li.songe.gkd.shizuku.safeTap
 
 @Serializable
 data class GkdAction(
     val selector: String,
-    val quickFind: Boolean = false,
+    val fastQuery: Boolean = false,
     val action: String? = null,
-    val position: RawSubscription.Position? = null
+    val position: RawSubscription.Position? = null,
 )
 
 @Serializable
@@ -22,6 +24,7 @@ data class ActionResult(
     val action: String?,
     val result: Boolean,
     val shizuku: Boolean = false,
+    val position: Pair<Float, Float>? = null,
 )
 
 sealed class ActionPerformer(val action: String) {
@@ -29,7 +32,6 @@ sealed class ActionPerformer(val action: String) {
         context: AccessibilityService,
         node: AccessibilityNodeInfo,
         position: RawSubscription.Position?,
-        shizukuClickFc: ((x: Float, y: Float) -> Boolean?)? = null,
     ): ActionResult
 
     data object ClickNode : ActionPerformer("clickNode") {
@@ -37,7 +39,6 @@ sealed class ActionPerformer(val action: String) {
             context: AccessibilityService,
             node: AccessibilityNodeInfo,
             position: RawSubscription.Position?,
-            shizukuClickFc: ((x: Float, y: Float) -> Boolean?)?
         ): ActionResult {
             return ActionResult(
                 action = action,
@@ -51,7 +52,6 @@ sealed class ActionPerformer(val action: String) {
             context: AccessibilityService,
             node: AccessibilityNodeInfo,
             position: RawSubscription.Position?,
-            shizukuClickFc: ((x: Float, y: Float) -> Boolean?)?,
         ): ActionResult {
             val rect = Rect()
             node.getBoundsInScreen(rect)
@@ -60,11 +60,11 @@ sealed class ActionPerformer(val action: String) {
             val y = p?.second ?: ((rect.bottom + rect.top) / 2f)
             return ActionResult(
                 action = action,
-                // TODO 在分屏/小窗模式下会点击到应用界面外部导致误触其它应用
+                // TODO 在分屏/小窗模式下会点击到应用界面外部导致误触其他应用
                 result = if (0 <= x && 0 <= y && x <= ScreenUtils.getScreenWidth() && y <= ScreenUtils.getScreenHeight()) {
-                    val result = shizukuClickFc?.invoke(x, y)
+                    val result = safeTap(x, y)
                     if (result != null) {
-                        return ActionResult(action, result, true)
+                        return ActionResult(action, result, true, position = x to y)
                     }
                     val gestureDescription = GestureDescription.Builder()
                     val path = Path()
@@ -78,7 +78,8 @@ sealed class ActionPerformer(val action: String) {
                     true
                 } else {
                     false
-                }
+                },
+                position = x to y
             )
         }
     }
@@ -88,7 +89,6 @@ sealed class ActionPerformer(val action: String) {
             context: AccessibilityService,
             node: AccessibilityNodeInfo,
             position: RawSubscription.Position?,
-            shizukuClickFc: ((x: Float, y: Float) -> Boolean?)?
         ): ActionResult {
             if (node.isClickable) {
                 val result = ClickNode.perform(context, node, position)
@@ -96,7 +96,7 @@ sealed class ActionPerformer(val action: String) {
                     return result
                 }
             }
-            return ClickCenter.perform(context, node, position, shizukuClickFc)
+            return ClickCenter.perform(context, node, position)
         }
     }
 
@@ -105,7 +105,6 @@ sealed class ActionPerformer(val action: String) {
             context: AccessibilityService,
             node: AccessibilityNodeInfo,
             position: RawSubscription.Position?,
-            shizukuClickFc: ((x: Float, y: Float) -> Boolean?)?
         ): ActionResult {
             return ActionResult(
                 action = action,
@@ -119,24 +118,29 @@ sealed class ActionPerformer(val action: String) {
             context: AccessibilityService,
             node: AccessibilityNodeInfo,
             position: RawSubscription.Position?,
-            shizukuClickFc: ((x: Float, y: Float) -> Boolean?)?
         ): ActionResult {
             val rect = Rect()
             node.getBoundsInScreen(rect)
             val p = position?.calc(rect)
             val x = p?.first ?: ((rect.right + rect.left) / 2f)
             val y = p?.second ?: ((rect.bottom + rect.top) / 2f)
-            // 内部的 DEFAULT_LONG_PRESS_TIMEOUT 常量是 400
-            // 而 ViewConfiguration.getLongPressTimeout() 返回 300, 这将导致触发普通的 click 事件
+            // 500 https://cs.android.com/android/platform/superproject/+/android-8.1.0_r81:frameworks/base/core/java/android/view/ViewConfiguration.java;l=65
+            // 400 https://cs.android.com/android/platform/superproject/main/+/main:frameworks/base/core/java/android/view/ViewConfiguration.java;drc=8b948e548b782592ae280a3cd9a91798afe6df9d;l=82
+            // 某些系统的 ViewConfiguration.getLongPressTimeout() 返回 300 , 这将导致触发普通的 click 事件
+            val longClickDuration = 500L
             return ActionResult(
                 action = action,
                 result = if (0 <= x && 0 <= y && x <= ScreenUtils.getScreenWidth() && y <= ScreenUtils.getScreenHeight()) {
+                    val result = safeLongTap(x, y, longClickDuration)
+                    if (result != null) {
+                        return ActionResult(action, result, true, position = x to y)
+                    }
                     val gestureDescription = GestureDescription.Builder()
                     val path = Path()
                     path.moveTo(x, y)
                     gestureDescription.addStroke(
                         GestureDescription.StrokeDescription(
-                            path, 0, 400L
+                            path, 0, longClickDuration
                         )
                     )
                     // TODO 传入处理 callback
@@ -144,7 +148,8 @@ sealed class ActionPerformer(val action: String) {
                     true
                 } else {
                     false
-                }
+                },
+                position = x to y
             )
         }
     }
@@ -154,7 +159,6 @@ sealed class ActionPerformer(val action: String) {
             context: AccessibilityService,
             node: AccessibilityNodeInfo,
             position: RawSubscription.Position?,
-            shizukuClickFc: ((x: Float, y: Float) -> Boolean?)?
         ): ActionResult {
             if (node.isLongClickable) {
                 val result = LongClickNode.perform(context, node, position)
@@ -162,7 +166,7 @@ sealed class ActionPerformer(val action: String) {
                     return result
                 }
             }
-            return LongClickCenter.perform(context, node, position, shizukuClickFc)
+            return LongClickCenter.perform(context, node, position)
         }
     }
 
@@ -171,7 +175,6 @@ sealed class ActionPerformer(val action: String) {
             context: AccessibilityService,
             node: AccessibilityNodeInfo,
             position: RawSubscription.Position?,
-            shizukuClickFc: ((x: Float, y: Float) -> Boolean?)?
         ): ActionResult {
             return ActionResult(
                 action = action,

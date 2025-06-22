@@ -1,49 +1,32 @@
 package li.songe.gkd.ui.home
 
-import android.webkit.URLUtil
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
-import androidx.hilt.navigation.compose.hiltViewModel
-import com.blankj.utilcode.util.LogUtils
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.ramcosta.composedestinations.annotation.Destination
-import com.ramcosta.composedestinations.annotation.RootNavGraph
-import li.songe.gkd.MainActivity
-import li.songe.gkd.util.ProfileTransitions
+import com.ramcosta.composedestinations.annotation.RootGraph
+import li.songe.gkd.ui.local.LocalMainViewModel
+import li.songe.gkd.ui.style.ProfileTransitions
 
 data class BottomNavItem(
     val label: String,
     val icon: ImageVector,
 )
 
-@RootNavGraph(start = true)
-@Destination(style = ProfileTransitions::class)
+@Destination<RootGraph>(style = ProfileTransitions::class, start = true)
 @Composable
 fun HomePage() {
-    val context = LocalContext.current as MainActivity
-    val vm = hiltViewModel<HomeVm>()
-    val tab by vm.tabFlow.collectAsState()
-
-    val intent = context.intent
-    LaunchedEffect(key1 = intent, block = {
-        if (intent != null) {
-            context.intent = null
-            val data = intent.data
-            val url = data?.getQueryParameter("url")
-            if (data?.scheme == "gkd" && data.host == "import" && URLUtil.isNetworkUrl(url)) {
-                LogUtils.d(data, url)
-            }
-        }
-    })
+    val mainVm = LocalMainViewModel.current
+    viewModel<HomeVm>()
+    val tab by mainVm.tabFlow.collectAsState()
 
     val controlPage = useControlPage()
     val subsPage = useSubsManagePage()
@@ -52,8 +35,7 @@ fun HomePage() {
 
     val pages = arrayOf(controlPage, subsPage, appListPage, settingsPage)
 
-    val currentPage = pages.find { p -> p.navItem === tab }
-        ?: controlPage
+    val currentPage = pages.find { p -> p.navItem.label == tab.label } ?: controlPage
 
     Scaffold(
         modifier = currentPage.modifier,
@@ -63,10 +45,10 @@ fun HomePage() {
             NavigationBar {
                 pages.forEach { page ->
                     NavigationBarItem(
-                        selected = tab == page.navItem,
+                        selected = tab.label == page.navItem.label,
                         modifier = Modifier,
                         onClick = {
-                            vm.tabFlow.value = page.navItem
+                            mainVm.updateTab(page.navItem)
                         },
                         icon = {
                             Icon(

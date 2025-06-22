@@ -1,6 +1,8 @@
 package li.songe.gkd.debug
 
 import android.graphics.Bitmap
+import android.view.accessibility.AccessibilityNodeInfo
+import androidx.core.graphics.createBitmap
 import androidx.core.graphics.set
 import com.blankj.utilcode.util.BarUtils
 import com.blankj.utilcode.util.LogUtils
@@ -12,17 +14,20 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.serialization.encodeToString
 import li.songe.gkd.data.ComplexSnapshot
 import li.songe.gkd.data.RpcError
-import li.songe.gkd.data.createComplexSnapshot
+import li.songe.gkd.data.info2nodeList
 import li.songe.gkd.data.toSnapshot
 import li.songe.gkd.db.DbSet
-import li.songe.gkd.service.GkdAbService
+import li.songe.gkd.notif.notify
+import li.songe.gkd.notif.snapshotNotif
+import li.songe.gkd.service.A11yService
+import li.songe.gkd.service.getAndUpdateCurrentRules
+import li.songe.gkd.service.safeActiveWindow
 import li.songe.gkd.util.appInfoCacheFlow
 import li.songe.gkd.util.keepNullJson
+import li.songe.gkd.util.sharedDir
 import li.songe.gkd.util.snapshotFolder
-import li.songe.gkd.util.snapshotZipDir
 import li.songe.gkd.util.storeFlow
 import li.songe.gkd.util.toast
 import java.io.File
@@ -57,9 +62,9 @@ object SnapshotExt {
         } else {
             "${snapshotId}.zip"
         }
-        val file = snapshotZipDir.resolve(filename)
+        val file = sharedDir.resolve(filename)
         if (file.exists()) {
-            return file
+            file.delete()
         }
         withContext(Dispatchers.IO) {
             ZipUtils.zipFiles(
@@ -81,37 +86,54 @@ object SnapshotExt {
 
     private val captureLoading = MutableStateFlow(false)
 
+    private fun createComplexSnapshot(rootNode: AccessibilityNodeInfo): ComplexSnapshot {
+        val currentActivityId = getAndUpdateCurrentRules().topActivity.activityId
+
+        return ComplexSnapshot(
+            id = System.currentTimeMillis(),
+
+            appId = rootNode.packageName.toString(),
+            activityId = currentActivityId,
+
+            screenHeight = ScreenUtils.getScreenHeight(),
+            screenWidth = ScreenUtils.getScreenWidth(),
+            isLandscape = ScreenUtils.isLandscape(),
+
+            nodes = info2nodeList(rootNode)
+        )
+    }
+
     suspend fun captureSnapshot(skipScreenshot: Boolean = false): ComplexSnapshot {
-        if (!GkdAbService.isRunning.value) {
-            throw RpcError("无障碍不可用")
+        if (!A11yService.isRunning.value) {
+            throw RpcError("无障碍不可用,请先授权")
         }
         if (captureLoading.value) {
             throw RpcError("正在保存快照,不可重复操作")
         }
         captureLoading.value = true
-        toast("正在保存快照...")
-
         try {
-            val snapshotDef = coroutineScope { async(Dispatchers.IO) { createComplexSnapshot() } }
-            val bitmapDef = coroutineScope {// TODO 也许在分屏模式下可能需要处理
+            val rootNode =
+                A11yService.instance?.safeActiveWindow
+                    ?: throw RpcError("当前应用没有无障碍信息,捕获失败")
+            if (storeFlow.value.showSaveSnapshotToast) {
+                toast("正在保存快照...")
+            }
+            val snapshotDef =
+                coroutineScope { async(Dispatchers.IO) { createComplexSnapshot(rootNode) } }
+            val bitmapDef = coroutineScope {
                 async(Dispatchers.IO) {
                     if (skipScreenshot) {
                         LogUtils.d("跳过截屏，即将使用空白图片")
-                        Bitmap.createBitmap(
-                            ScreenUtils.getScreenWidth(),
-                            ScreenUtils.getScreenHeight(),
-                            Bitmap.Config.ARGB_8888
-                        )
+                        createBitmap(ScreenUtils.getScreenWidth(), ScreenUtils.getScreenHeight())
                     } else {
-                        GkdAbService.currentScreenshot() ?: withTimeoutOrNull(3_000) {
+                        A11yService.currentScreenshot() ?: withTimeoutOrNull(3_000) {
                             if (!ScreenshotService.isRunning.value) {
                                 return@withTimeoutOrNull null
                             }
                             ScreenshotService.screenshot()
-                        } ?: Bitmap.createBitmap(
+                        } ?: createBitmap(
                             ScreenUtils.getScreenWidth(),
-                            ScreenUtils.getScreenHeight(),
-                            Bitmap.Config.ARGB_8888
+                            ScreenUtils.getScreenHeight()
                         ).apply {
                             LogUtils.d("截屏不可用，即将使用空白图片")
                         }
@@ -139,7 +161,15 @@ object SnapshotExt {
                 File(getSnapshotPath(snapshot.id)).writeText(text)
                 DbSet.snapshotDao.insert(snapshot.toSnapshot())
             }
-            toast("快照捕获成功")
+            toast("快照成功")
+            val desc = snapshot.appInfo?.name ?: snapshot.appId
+            snapshotNotif.copy(
+                text = if (desc != null) {
+                    "快照「$desc」已保存至记录"
+                } else {
+                    snapshotNotif.text
+                }
+            ).notify()
             return snapshot
         } finally {
             captureLoading.value = false

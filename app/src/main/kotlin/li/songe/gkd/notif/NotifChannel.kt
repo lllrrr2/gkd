@@ -29,10 +29,26 @@ val httpChannel by lazy {
         id = "http", name = "HTTP服务", desc = "用于连接Web端工具调试"
     )
 }
+val snapshotChannel by lazy {
+    NotifChannel(
+        id = "snapshot", name = "快照通知", desc = "捕获快照后发出通知"
+    )
+}
+val snapshotActionChannel by lazy {
+    NotifChannel(
+        id = "snapshotAction", name = "快照服务", desc = "供其他程序调用的快照服务"
+    )
+}
 
 fun initChannel() {
-    createChannel(app, defaultChannel)
-    createChannel(app, floatingChannel)
-    createChannel(app, screenshotChannel)
-    createChannel(app, httpChannel)
+    arrayOf(
+        defaultChannel,
+        floatingChannel,
+        screenshotChannel,
+        httpChannel,
+        snapshotChannel,
+        snapshotActionChannel,
+    ).forEach {
+        createChannel(app, it)
+    }
 }

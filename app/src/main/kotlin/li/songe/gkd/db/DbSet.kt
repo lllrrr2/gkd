@@ -8,8 +8,10 @@ object DbSet {
 
     private fun buildDb(): AppDb {
         return Room.databaseBuilder(
-            app, AppDb::class.java, dbFolder.resolve("gkd.db").absolutePath
-        ).fallbackToDestructiveMigration().build()
+            app,
+            AppDb::class.java,
+            dbFolder.resolve("gkd.db").absolutePath
+        ).fallbackToDestructiveMigration(false).build()
     }
 
     private val db by lazy { buildDb() }
@@ -19,8 +21,12 @@ object DbSet {
         get() = db.subsConfigDao()
     val snapshotDao
         get() = db.snapshotDao()
-    val clickLogDao
-        get() = db.clickLogDao()
+    val actionLogDao
+        get() = db.actionLogDao()
     val categoryConfigDao
         get() = db.categoryConfigDao()
+    val activityLogDao
+        get() = db.activityLogDao()
+    val appConfigDao
+        get() = db.appConfigDao()
 }

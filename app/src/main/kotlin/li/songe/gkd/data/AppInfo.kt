@@ -7,6 +7,7 @@ import android.os.Build
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
 import li.songe.gkd.app
+import java.util.Objects
 
 @Serializable
 data class AppInfo(
@@ -19,14 +20,42 @@ data class AppInfo(
     val isSystem: Boolean,
     val mtime: Long,
     val hidden: Boolean,
-)
+    val userId: Int? = null, // null -> current user
+) {
+    // 重写 equals 和 hashCode 便于 compose 重组比较
+    override fun equals(other: Any?): Boolean {
+        if (other === this) return true
+        if (other !is AppInfo) return false
+        return (id == other.id && icon == other.icon && mtime == other.mtime && userId == other.userId)
+    }
 
-fun PackageInfo.toAppInfo(): AppInfo? {
-    applicationInfo ?: return null
+    override fun hashCode(): Int {
+        return Objects.hash(id, icon, mtime, userId)
+    }
+}
+
+val selfAppInfo by lazy {
+    app.packageManager.getPackageInfo(app.packageName, 0).toAppInfo()
+}
+
+fun Drawable.safeGet(): Drawable? {
+    return if (intrinsicHeight <= 0 || intrinsicWidth <= 0) {
+        // https://github.com/gkd-kit/gkd/issues/924
+        null
+    } else {
+        this
+    }
+}
+
+/**
+ * 平均单次调用时间 11ms
+ */
+fun PackageInfo.toAppInfo(
+    userId: Int? = null,
+    hidden: Boolean? = null,
+): AppInfo {
     return AppInfo(
         id = packageName,
-        name = applicationInfo.loadLabel(app.packageManager).toString(),
-        icon = applicationInfo.loadIcon(app.packageManager),
         versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             longVersionCode
         } else {
@@ -34,8 +63,11 @@ fun PackageInfo.toAppInfo(): AppInfo? {
             versionCode.toLong()
         },
         versionName = versionName,
-        isSystem = (ApplicationInfo.FLAG_SYSTEM and applicationInfo.flags) != 0,
         mtime = lastUpdateTime,
-        hidden = app.packageManager.getLaunchIntentForPackage(packageName) == null
+        isSystem = applicationInfo?.let { it.flags and ApplicationInfo.FLAG_SYSTEM != 0 } ?: false,
+        name = applicationInfo?.run { loadLabel(app.packageManager).toString() } ?: packageName,
+        icon = applicationInfo?.loadIcon(app.packageManager)?.safeGet(),
+        userId = userId,
+        hidden = hidden ?: (app.packageManager.getLaunchIntentForPackage(packageName) == null),
     )
 }

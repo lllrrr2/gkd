@@ -1,11 +1,9 @@
 package li.songe.gkd.data
 
-import li.songe.gkd.util.ResolvedAppGroup
-
 class AppRule(
     rule: RawSubscription.RawAppRule,
     g: ResolvedAppGroup,
-    val appInfo: AppInfo?,
+    appInfo: AppInfo?,
 ) : ResolvedRule(
     rule = rule,
     g = g,

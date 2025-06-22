@@ -21,3 +21,6 @@ local.properties
 *.keystore
 
 /_assets
+/.kotlin
+
+/gradle/libs.versions.updates.toml

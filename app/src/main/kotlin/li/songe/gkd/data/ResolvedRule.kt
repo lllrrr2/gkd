@@ -3,12 +3,10 @@ package li.songe.gkd.data
 import android.accessibilityservice.AccessibilityService
 import android.view.accessibility.AccessibilityNodeInfo
 import kotlinx.coroutines.Job
-import li.songe.gkd.service.createCacheTransform
-import li.songe.gkd.service.createTransform
+import li.songe.gkd.service.appChangeTime
 import li.songe.gkd.service.lastTriggerRule
 import li.songe.gkd.service.lastTriggerTime
-import li.songe.gkd.service.querySelector
-import li.songe.gkd.util.ResolvedGroup
+import li.songe.selector.MatchOption
 import li.songe.selector.Selector
 
 sealed class ResolvedRule(
@@ -18,19 +16,28 @@ sealed class ResolvedRule(
     private val group = g.group
     val subsItem = g.subsItem
     val rawSubs = g.subscription
-    val config = g.config
     val key = rule.key
     val index = group.rules.indexOfFirst { r -> r === rule }
+    val excludeData = g.excludeData
     private val preKeys = (rule.preKeys ?: emptyList()).toSet()
-    private val matches = rule.matches?.map { s -> Selector.parse(s) } ?: emptyList()
-    private val excludeMatches = (rule.excludeMatches ?: emptyList()).map { s -> Selector.parse(s) }
+    val matches =
+        (rule.matches ?: emptyList()).map { s -> group.cacheMap[s] ?: Selector.parse(s) }
+    val anyMatches =
+        (rule.anyMatches ?: emptyList()).map { s -> group.cacheMap[s] ?: Selector.parse(s) }
+    val excludeMatches =
+        (rule.excludeMatches ?: emptyList()).map { s -> group.cacheMap[s] ?: Selector.parse(s) }
+    val excludeAllMatches =
+        (rule.excludeAllMatches ?: emptyList()).map { s -> group.cacheMap[s] ?: Selector.parse(s) }
 
     private val resetMatch = rule.resetMatch ?: group.resetMatch
     val matchDelay = rule.matchDelay ?: group.matchDelay ?: 0L
     val actionDelay = rule.actionDelay ?: group.actionDelay ?: 0L
     private val matchTime = rule.matchTime ?: group.matchTime
     private val forcedTime = rule.forcedTime ?: group.forcedTime ?: 0L
-    private val quickFind = rule.quickFind ?: group.quickFind ?: false
+    val matchOption = MatchOption(
+        fastQuery = rule.fastQuery ?: group.fastQuery ?: false
+    )
+    val matchRoot = rule.matchRoot ?: group.matchRoot ?: false
     val order = rule.order ?: group.order ?: 0
 
     private val actionCdKey = rule.actionCdKey ?: group.actionCdKey
@@ -47,15 +54,23 @@ sealed class ResolvedRule(
         null
     } ?: group.actionMaximum
 
-    private val slowSelectors by lazy {
-        (matches + excludeMatches).filterNot { s ->
-            ((quickFind && s.canQf) || s.isMatchRoot) && !s.connectKeys.contains(
-                "<<"
-            )
-        }
+    private val hasSlowSelector by lazy {
+        (matches + excludeMatches + anyMatches + excludeAllMatches).any { s -> s.isSlow(matchOption) }
+    }
+    val priorityTime = rule.priorityTime ?: group.priorityTime ?: 0
+    val priorityActionMaximum = rule.priorityActionMaximum ?: group.priorityActionMaximum ?: 1
+    val priorityEnabled: Boolean
+        get() = priorityTime > 0
+
+    fun isPriority(): Boolean {
+        if (!priorityEnabled) return false
+        if (priorityActionMaximum <= actionCount.value) return false
+        if (!status.ok) return false
+        val t = System.currentTimeMillis()
+        return t - matchChangedTime < priorityTime + matchDelay
     }
 
-    val isSlow by lazy { preKeys.isEmpty() && slowSelectors.isNotEmpty() && (matchTime == null || matchTime > 10_000L) }
+    val isSlow by lazy { preKeys.isEmpty() && (matchTime == null || matchTime > 10_000L) && hasSlowSelector }
 
     var groupToRules: Map<out RawSubscription.RawGroupProps, List<ResolvedRule>> = emptyMap()
         set(value) {
@@ -119,55 +134,40 @@ sealed class ResolvedRule(
 
     var actionCount = Value(0)
 
-    var matchChangedTime = 0L
+    private var matchChangedTime = 0L
+    val isFirstMatchApp: Boolean
+        get() = matchChangedTime == appChangeTime
 
     private val matchLimitTime = (matchTime ?: 0) + matchDelay
 
-    val resetMatchTypeWhenActivity = when (resetMatch) {
-        "app" -> false
-        "activity" -> true
-        else -> true
+    val resetMatchType = ResetMatchType.allSubObject.find {
+        it.value == resetMatch
+    } ?: ResetMatchType.Activity
+
+    fun resetState(t: Long) {
+        actionCount.value = 0
+        actionDelayTriggerTime = 0L
+        actionTriggerTime.value = 0
+        actionDelayJob?.run {
+            cancel()
+            actionDelayJob = null
+        }
+        matchDelayJob?.run {
+            cancel()
+            matchDelayJob = null
+        }
+        matchChangedTime = t
     }
 
-    private val canCacheIndex = (matches + excludeMatches).any { s -> s.canCacheIndex }
-    private val transform = if (canCacheIndex) defaultCacheTransform.transform else defaultTransform
-
-    fun query(
-        nodeInfo: AccessibilityNodeInfo?,
-    ): AccessibilityNodeInfo? {
-        try {
-            if (nodeInfo == null) return null
-            var target: AccessibilityNodeInfo? = null
-            for (selector in matches) {
-                target = nodeInfo.querySelector(selector, quickFind, transform)
-                    ?: return null
-            }
-            for (selector in excludeMatches) {
-                if (nodeInfo.querySelector(
-                        selector,
-                        quickFind,
-                        transform
-                    ) != null
-                ) return null
-            }
-            return target
-        } finally {
-            defaultCacheTransform.indexCache.clear()
-        }
-    }
-
-    private val performer = ActionPerformer.getAction(
-        rule.action ?: rule.position?.let {
-            ActionPerformer.ClickCenter.action
-        }
-    )
+    private val performer = ActionPerformer.getAction(rule.action ?: rule.position?.let {
+        ActionPerformer.ClickCenter.action
+    })
 
     fun performAction(
         context: AccessibilityService,
-        node: AccessibilityNodeInfo,
-        shizukuClickFc: ((x: Float, y: Float) -> Boolean?)? = null
+        node: AccessibilityNodeInfo
     ): ActionResult {
-        return performer.perform(context, node, rule.position, shizukuClickFc)
+        return performer.perform(context, node, rule.position)
     }
 
     var matchDelayJob: Job? = null
@@ -179,12 +179,8 @@ sealed class ResolvedRule(
                     return RuleStatus.Status1 // 达到最大执行次数
                 }
             }
-            if (preRules.isNotEmpty()) { // 需要提前点击某个规则
-                return if (preRules.any { it === lastTriggerRule }) {
-                    RuleStatus.StatusOk
-                } else {
-                    RuleStatus.Status2
-                }
+            if (preRules.isNotEmpty() && !preRules.any { it === lastTriggerRule }) {
+                return RuleStatus.Status2 // 需要提前触发某个规则
             }
             val t = System.currentTimeMillis()
             if (matchDelay > 0 && t - matchChangedTime < matchDelay) {
@@ -198,7 +194,7 @@ sealed class ResolvedRule(
             }
             if (actionDelayTriggerTime > 0) {
                 if (actionDelayTriggerTime + actionDelay > t) {
-                    return RuleStatus.Status6 // 处于点击延迟中
+                    return RuleStatus.Status6 // 处于触发延迟中
                 }
             }
             return RuleStatus.StatusOk
@@ -208,30 +204,44 @@ sealed class ResolvedRule(
         return "id:${subsItem.id}, v:${rawSubs.version}, type:${type}, gKey=${group.key}, gName:${group.name}, index:${index}, key:${key}, status:${status.name}"
     }
 
-    val excludeData = ExcludeData.parse(config?.exclude)
-
     abstract val type: String
 
     // 范围越精确, 优先级越高
     abstract fun matchActivity(appId: String, activityId: String? = null): Boolean
+}
 
+sealed class ResetMatchType(val value: String) {
+    data object Activity : ResetMatchType("activity")
+    data object Match : ResetMatchType("match")
+    data object App : ResetMatchType("app")
+
+    companion object {
+        val allSubObject by lazy { listOf(Activity, Match, App) }
+    }
 }
 
 sealed class RuleStatus(val name: String) {
     data object StatusOk : RuleStatus("ok")
     data object Status1 : RuleStatus("达到最大执行次数")
-    data object Status2 : RuleStatus("需要提前点击某个规则")
+    data object Status2 : RuleStatus("需要提前触发某个规则")
     data object Status3 : RuleStatus("处于匹配延迟")
     data object Status4 : RuleStatus("超出匹配时间")
     data object Status5 : RuleStatus("处于冷却时间")
-    data object Status6 : RuleStatus("处于点击延迟")
+    data object Status6 : RuleStatus("处于触发延迟")
+
+    val ok: Boolean
+        get() = this === StatusOk
+
+    val alive: Boolean
+        get() = this !== Status1 && this !== Status2 && this !== Status4
 }
 
 fun getFixActivityIds(
     appId: String,
     activityIds: List<String>?,
 ): List<String> {
-    return (activityIds ?: emptyList()).map { activityId ->
+    if (activityIds == null || activityIds.isEmpty()) return emptyList()
+    return activityIds.map { activityId ->
         if (activityId.startsWith('.')) { // .a.b.c -> com.x.y.x.a.b.c
             appId + activityId
         } else {
@@ -239,8 +249,3 @@ fun getFixActivityIds(
         }
     }
 }
-
-private val defaultTransform = createTransform()
-private val defaultCacheTransform = createCacheTransform()
-
-

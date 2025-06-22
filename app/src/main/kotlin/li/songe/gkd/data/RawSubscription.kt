@@ -1,7 +1,6 @@
 package li.songe.gkd.data
 
 import android.graphics.Rect
-import androidx.compose.runtime.Immutable
 import com.blankj.utilcode.util.LogUtils
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
@@ -10,20 +9,27 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
-import li.songe.gkd.service.checkSelector
+import li.songe.gkd.service.typeInfo
+import li.songe.gkd.util.LOCAL_SUBS_IDS
+import li.songe.gkd.util.appInfoCacheFlow
+import li.songe.gkd.util.distinctByIfAny
+import li.songe.gkd.util.filterIfNotAll
 import li.songe.gkd.util.json
-import li.songe.gkd.util.json5ToJson
+import li.songe.gkd.util.toJson5String
 import li.songe.gkd.util.toast
+import li.songe.json5.Json5
 import li.songe.selector.Selector
 import net.objecthunter.exp4j.Expression
 import net.objecthunter.exp4j.ExpressionBuilder
+import java.util.Objects
 
-@Immutable
+
 @Serializable
 data class RawSubscription(
     val id: Long,
@@ -37,12 +43,51 @@ data class RawSubscription(
     val categories: List<RawCategory> = emptyList(),
     val apps: List<RawApp> = emptyList(),
 ) {
+    // 重写 equals 和 hashCode 便于 compose 重组比较
+    override fun equals(other: Any?): Boolean {
+        return other === this
+    }
+
+    override fun hashCode(): Int {
+        return Objects.hash(id, name, version)
+    }
+
+    val isLocal: Boolean
+        get() = LOCAL_SUBS_IDS.contains(id)
 
     val categoryToGroupsMap by lazy {
         val allAppGroups = apps.flatMap { a -> a.groups.map { g -> g to a } }
         allAppGroups.groupBy { g ->
             categories.find { c -> g.first.name.startsWith(c.name) }
         }
+    }
+
+    val categoryToAppMap by lazy {
+        val map = mutableMapOf<RawCategory, MutableList<RawApp>>()
+        categories.forEach { c ->
+            apps.forEach { a ->
+                if (a.groups.any { g -> g.name.startsWith(c.name) }) {
+                    val list = map[c]
+                    if (list == null) {
+                        map[c] = mutableListOf(a)
+                    } else {
+                        list.add(a)
+                    }
+                }
+            }
+        }
+        map
+    }
+
+    fun getAppGroups(appId: String): List<RawAppGroup> {
+        return apps.find { a -> a.id == appId }?.groups ?: emptyList()
+    }
+    fun getApp(appId: String): RawApp {
+        return apps.find { a -> a.id == appId } ?: RawApp(
+            id = appId,
+            name = appInfoCacheFlow.value[appId]?.name,
+            groups = emptyList()
+        )
     }
 
     val groupToCategoryMap by lazy {
@@ -57,8 +102,44 @@ data class RawSubscription(
         map
     }
 
-    private val appGroups by lazy {
+    val appGroups by lazy {
         apps.flatMap { a -> a.groups }
+    }
+
+    val groupsSize by lazy {
+        appGroups.size + globalGroups.size
+    }
+
+    val globalGroupAppGroupNameDisableMap by lazy {
+        globalGroups.mapNotNull { g ->
+            val n = g.disableIfAppGroupMatch
+            if (n != null) {
+                val gName = if (n.isNotEmpty()) {
+                    n
+                } else {
+                    g.name
+                }
+                g.key to apps.filter { a ->
+                    a.groups.any { ag ->
+                        ag.ignoreGlobalGroupMatch != true && ag.name.startsWith(gName)
+                    }
+                }.map { it.id }.toHashSet()
+            } else {
+                null
+            }
+        }.toMap()
+    }
+
+    fun getGlobalGroupInnerDisabled(globalGroup: RawGlobalGroup, appId: String): Boolean {
+        globalGroup.appIdEnable[appId]?.let {
+            if (it == false) return true
+        }
+        globalGroupAppGroupNameDisableMap[globalGroup.key]?.let {
+            if (it.contains(appId)) {
+                return true
+            }
+        }
+        return false
     }
 
     val numText by lazy {
@@ -84,7 +165,6 @@ data class RawSubscription(
         }
     }
 
-    @Immutable
     @Serializable
     data class RawApp(
         val id: String,
@@ -92,17 +172,14 @@ data class RawSubscription(
         val groups: List<RawAppGroup> = emptyList(),
     )
 
-    @Immutable
+
     @Serializable
     data class RawCategory(val key: Int, val name: String, val enable: Boolean?)
 
-    @Immutable
+
     @Serializable
     data class Position(
-        val left: String?,
-        val top: String?,
-        val right: String?,
-        val bottom: String?
+        val left: String?, val top: String?, val right: String?, val bottom: String?
     ) {
         private val leftExp by lazy { getExpression(left) }
         private val topExp by lazy { getExpression(top) }
@@ -119,10 +196,7 @@ data class RawSubscription(
         fun calc(rect: Rect): Pair<Float, Float>? {
             if (!isValid) return null
             arrayOf(
-                leftExp,
-                topExp,
-                rightExp,
-                bottomExp
+                leftExp, topExp, rightExp, bottomExp
             ).forEach { exp ->
                 if (exp != null) {
                     setVariables(exp, rect)
@@ -162,7 +236,8 @@ data class RawSubscription(
     sealed interface RawCommonProps {
         val actionCd: Long?
         val actionDelay: Long?
-        val quickFind: Boolean?
+        val fastQuery: Boolean?
+        val matchRoot: Boolean?
         val matchDelay: Long?
         val matchTime: Long?
         val actionMaximum: Int?
@@ -172,7 +247,10 @@ data class RawSubscription(
         val order: Int?
         val forcedTime: Long?
         val snapshotUrls: List<String>?
+        val excludeSnapshotUrls: List<String>?
         val exampleUrls: List<String>?
+        val priorityTime: Long?
+        val priorityActionMaximum: Int?
     }
 
     sealed interface RawRuleProps : RawCommonProps {
@@ -182,10 +260,15 @@ data class RawSubscription(
         val action: String?
         val position: Position?
         val matches: List<String>?
+        val anyMatches: List<String>?
         val excludeMatches: List<String>?
+        val excludeAllMatches: List<String>?
+
+        fun getAllSelectorStrings(): List<String> {
+            return listOfNotNull(matches, excludeMatches, anyMatches, excludeAllMatches).flatten()
+        }
     }
 
-    @Immutable
     sealed interface RawGroupProps : RawCommonProps {
         val name: String
         val key: Int
@@ -197,6 +280,15 @@ data class RawSubscription(
         val valid: Boolean
         val errorDesc: String?
         val allExampleUrls: List<String>
+        val cacheMap: MutableMap<String, Selector?>
+        val cacheStr: String
+        val cacheJsonObject: JsonObject
+
+        val groupType: Int
+            get() = when (this) {
+                is RawAppGroup -> SubsConfig.AppGroupType
+                is RawGlobalGroup -> SubsConfig.GlobalGroupType
+            }
     }
 
     sealed interface RawAppRuleProps {
@@ -216,7 +308,7 @@ data class RawSubscription(
         val apps: List<RawGlobalApp>?
     }
 
-    @Immutable
+
     @Serializable
     data class RawGlobalApp(
         val id: String,
@@ -229,83 +321,121 @@ data class RawSubscription(
         override val excludeVersionCodes: List<Long>?,
     ) : RawAppRuleProps
 
-    @Immutable
+
     @Serializable
     data class RawGlobalGroup(
-        override val name: String,
         override val key: Int,
+        override val name: String,
         override val desc: String?,
         override val enable: Boolean?,
         override val scopeKeys: List<Int>?,
         override val actionCd: Long?,
         override val actionDelay: Long?,
-        override val quickFind: Boolean?,
+        override val fastQuery: Boolean?,
+        override val matchRoot: Boolean?,
         override val matchDelay: Long?,
         override val matchTime: Long?,
         override val actionMaximum: Int?,
         override val resetMatch: String?,
         override val actionCdKey: Int?,
         override val actionMaximumKey: Int?,
+        override val priorityTime: Long?,
+        override val priorityActionMaximum: Int?,
         override val order: Int?,
         override val forcedTime: Long?,
         override val snapshotUrls: List<String>?,
+        override val excludeSnapshotUrls: List<String>?,
         override val exampleUrls: List<String>?,
         override val matchAnyApp: Boolean?,
         override val matchSystemApp: Boolean?,
         override val matchLauncher: Boolean?,
-        override val apps: List<RawGlobalApp>?,
+        val disableIfAppGroupMatch: String?,
         override val rules: List<RawGlobalRule>,
+        override val apps: List<RawGlobalApp>?,
     ) : RawGroupProps, RawGlobalRuleProps {
-
-        val appIdEnable by lazy {
-            (apps ?: emptyList()).associate { a -> a.id to (a.enable ?: true) }
+        val appIdEnable: Map<String, Boolean> by lazy {
+            if (rules.all { r -> r.apps.isNullOrEmpty() }) {
+                apps?.associate { a -> a.id to (a.enable ?: true) } ?: emptyMap()
+            } else {
+                val allIds = mutableSetOf<String>()
+                apps?.forEach { a ->
+                    allIds.add(a.id)
+                }
+                rules.forEach { r ->
+                    r.apps?.forEach { a ->
+                        allIds.add(a.id)
+                    }
+                }
+                val dataMap = mutableMapOf<String, Boolean>()
+                allIds.forEach forEachId@{ id ->
+                    var temp: Boolean? = null
+                    rules.forEach { r ->
+                        val v = (r.apps ?: apps)?.find { it.id == id }?.enable ?: return@forEachId
+                        if (temp == null) {
+                            temp = v
+                        } else if (temp != v) {
+                            return@forEachId
+                        }
+                    }
+                    if (temp != null) {
+                        dataMap[id] = temp
+                    }
+                }
+                dataMap
+            }
         }
 
+        override val cacheMap by lazy { HashMap<String, Selector?>() }
         override val errorDesc by lazy { getErrorDesc() }
-
         override val valid by lazy { errorDesc == null }
-
         override val allExampleUrls by lazy {
             ((exampleUrls ?: emptyList()) + rules.flatMap { r ->
                 r.exampleUrls ?: emptyList()
             }).distinct()
         }
+        override val cacheStr by lazy { toJson5String(this) }
+        override val cacheJsonObject by lazy { json.encodeToJsonElement(this).jsonObject }
     }
 
-    @Immutable
+
     @Serializable
     data class RawGlobalRule(
+        override val key: Int?,
+        override val name: String?,
         override val actionCd: Long?,
         override val actionDelay: Long?,
-        override val quickFind: Boolean?,
+        override val fastQuery: Boolean?,
+        override val matchRoot: Boolean?,
         override val matchDelay: Long?,
         override val matchTime: Long?,
         override val actionMaximum: Int?,
         override val resetMatch: String?,
         override val actionCdKey: Int?,
         override val actionMaximumKey: Int?,
+        override val priorityTime: Long?,
+        override val priorityActionMaximum: Int?,
         override val order: Int?,
         override val forcedTime: Long?,
         override val snapshotUrls: List<String>?,
+        override val excludeSnapshotUrls: List<String>?,
         override val exampleUrls: List<String>?,
-        override val name: String?,
-        override val key: Int?,
         override val preKeys: List<Int>?,
         override val action: String?,
         override val position: Position?,
-        override val matches: List<String>,
+        override val matches: List<String>?,
         override val excludeMatches: List<String>?,
+        override val excludeAllMatches: List<String>?,
+        override val anyMatches: List<String>?,
         override val matchAnyApp: Boolean?,
         override val matchSystemApp: Boolean?,
         override val matchLauncher: Boolean?,
         override val apps: List<RawGlobalApp>?
     ) : RawRuleProps, RawGlobalRuleProps
 
-    @Immutable
     @Serializable
     data class RawAppGroup(
-        override val name: String,
         override val key: Int,
+        override val name: String,
         override val desc: String?,
         override val enable: Boolean?,
         override val scopeKeys: List<Int>?,
@@ -313,14 +443,18 @@ data class RawSubscription(
         override val actionMaximumKey: Int?,
         override val actionCd: Long?,
         override val actionDelay: Long?,
-        override val quickFind: Boolean?,
+        override val fastQuery: Boolean?,
+        override val matchRoot: Boolean?,
         override val actionMaximum: Int?,
+        override val priorityTime: Long?,
+        override val priorityActionMaximum: Int?,
         override val order: Int?,
         override val forcedTime: Long?,
         override val matchDelay: Long?,
         override val matchTime: Long?,
         override val resetMatch: String?,
         override val snapshotUrls: List<String>?,
+        override val excludeSnapshotUrls: List<String>?,
         override val exampleUrls: List<String>?,
         override val activityIds: List<String>?,
         override val excludeActivityIds: List<String>?,
@@ -329,42 +463,48 @@ data class RawSubscription(
         override val excludeVersionNames: List<String>?,
         override val versionCodes: List<Long>?,
         override val excludeVersionCodes: List<Long>?,
+        val ignoreGlobalGroupMatch: Boolean?,
     ) : RawGroupProps, RawAppRuleProps {
-
+        override val cacheMap by lazy { HashMap<String, Selector?>() }
         override val errorDesc by lazy { getErrorDesc() }
-
         override val valid by lazy { errorDesc == null }
-
         override val allExampleUrls by lazy {
             ((exampleUrls ?: emptyList()) + rules.flatMap { r ->
                 r.exampleUrls ?: emptyList()
             }).distinct()
         }
+        override val cacheStr by lazy { toJson5String(this) }
+        override val cacheJsonObject by lazy { json.encodeToJsonElement(this).jsonObject }
     }
 
-    @Immutable
     @Serializable
     data class RawAppRule(
-        override val name: String?,
         override val key: Int?,
+        override val name: String?,
         override val preKeys: List<Int>?,
         override val action: String?,
         override val position: Position?,
         override val matches: List<String>?,
         override val excludeMatches: List<String>?,
+        override val excludeAllMatches: List<String>?,
+        override val anyMatches: List<String>?,
 
         override val actionCdKey: Int?,
         override val actionMaximumKey: Int?,
         override val actionCd: Long?,
         override val actionDelay: Long?,
-        override val quickFind: Boolean?,
+        override val fastQuery: Boolean?,
+        override val matchRoot: Boolean?,
         override val actionMaximum: Int?,
+        override val priorityTime: Long?,
+        override val priorityActionMaximum: Int?,
         override val order: Int?,
         override val forcedTime: Long?,
         override val matchDelay: Long?,
         override val matchTime: Long?,
         override val resetMatch: String?,
         override val snapshotUrls: List<String>?,
+        override val excludeSnapshotUrls: List<String>?,
         override val exampleUrls: List<String>?,
 
         override val activityIds: List<String>?,
@@ -379,19 +519,18 @@ data class RawSubscription(
     companion object {
 
         private fun RawGroupProps.getErrorDesc(): String? {
-            val allSelectorStrings =
-                rules.map { r -> (r.matches ?: emptyList()) + (r.excludeMatches ?: emptyList()) }
-                    .flatten()
-
-            val allSelector = allSelectorStrings.map { s -> Selector.parseOrNull(s) }
-
-            allSelector.forEachIndexed { i, s ->
-                if (s == null) {
-                    return "非法选择器:${allSelectorStrings[i]}"
+            val allSelectorStrings = rules.map { r ->
+                r.getAllSelectorStrings()
+            }.flatten()
+            allSelectorStrings.forEach { source ->
+                try {
+                    val selector = Selector.parse(source)
+                    selector.checkType(typeInfo)
+                    cacheMap[source] = selector
+                } catch (e: Exception) {
+                    LogUtils.d("非法选择器", source, e.toString())
+                    return "非法选择器\n$source\n${e.message}"
                 }
-            }
-            allSelector.forEach { s ->
-                s?.checkSelector()?.let { return it }
             }
             rules.forEach { r ->
                 if (r.position?.isValid == false) {
@@ -407,7 +546,8 @@ data class RawSubscription(
             "right",
             "bottom",
             "width",
-            "height"
+            "height",
+            "random"
         )
 
         private fun setVariables(exp: Expression, rect: Rect) {
@@ -417,6 +557,7 @@ data class RawSubscription(
             exp.setVariable("bottom", rect.bottom.toDouble())
             exp.setVariable("width", rect.width().toDouble())
             exp.setVariable("height", rect.height().toDouble())
+            exp.setVariable("random", Math.random())
         }
 
         private fun getExpression(value: String?): Expression? {
@@ -460,8 +601,7 @@ data class RawSubscription(
         }
 
         private fun getStringIArray(
-            jsonObject: JsonObject? = null,
-            name: String
+            jsonObject: JsonObject? = null, name: String
         ): List<String>? {
             return when (val element = jsonObject?.get(name)) {
                 JsonNull, null -> null
@@ -514,11 +654,11 @@ data class RawSubscription(
                     if (p.isString) {
                         p.content
                     } else {
-                        error("Element $p is not a string")
+                        null
                     }
                 }
 
-                else -> error("Element $p is not a string")
+                else -> null
             }
 
         private fun getLong(jsonObject: JsonObject? = null, key: String): Long? =
@@ -528,7 +668,7 @@ data class RawSubscription(
                     p.long
                 }
 
-                else -> error("Element $p is not a long")
+                else -> null
             }
 
         private fun getInt(jsonObject: JsonObject? = null, key: String): Int? =
@@ -538,7 +678,7 @@ data class RawSubscription(
                     p.int
                 }
 
-                else -> error("Element $p is not a int")
+                else -> null
             }
 
         private fun getBoolean(jsonObject: JsonObject? = null, key: String): Boolean? =
@@ -548,7 +688,7 @@ data class RawSubscription(
                     p.boolean
                 }
 
-                else -> error("Element $p is not a boolean")
+                else -> null
             }
 
         private fun jsonToRuleRaw(rulesRawJson: JsonElement): RawAppRule {
@@ -562,18 +702,22 @@ data class RawSubscription(
                 excludeActivityIds = getStringIArray(jsonObject, "excludeActivityIds"),
                 matches = getStringIArray(jsonObject, "matches"),
                 excludeMatches = getStringIArray(jsonObject, "excludeMatches"),
+                excludeAllMatches = getStringIArray(jsonObject, "excludeAllMatches"),
+                anyMatches = getStringIArray(jsonObject, "anyMatches"),
                 key = getInt(jsonObject, "key"),
                 name = getString(jsonObject, "name"),
                 actionCd = getLong(jsonObject, "actionCd") ?: getLong(jsonObject, "cd"),
                 actionDelay = getLong(jsonObject, "actionDelay") ?: getLong(jsonObject, "delay"),
                 preKeys = getIntIArray(jsonObject, "preKeys"),
                 action = getString(jsonObject, "action"),
-                quickFind = getBoolean(jsonObject, "quickFind"),
+                fastQuery = getBoolean(jsonObject, "fastQuery"),
+                matchRoot = getBoolean(jsonObject, "matchRoot"),
                 actionMaximum = getInt(jsonObject, "actionMaximum"),
                 matchDelay = getLong(jsonObject, "matchDelay"),
                 matchTime = getLong(jsonObject, "matchTime"),
                 resetMatch = getString(jsonObject, "resetMatch"),
                 snapshotUrls = getStringIArray(jsonObject, "snapshotUrls"),
+                excludeSnapshotUrls = getStringIArray(jsonObject, "excludeSnapshotUrls"),
                 exampleUrls = getStringIArray(jsonObject, "exampleUrls"),
                 actionMaximumKey = getInt(jsonObject, "actionMaximumKey"),
                 actionCdKey = getInt(jsonObject, "actionCdKey"),
@@ -584,11 +728,13 @@ data class RawSubscription(
                 excludeVersionNames = getStringIArray(jsonObject, "excludeVersionNames"),
                 position = getPosition(jsonObject),
                 forcedTime = getLong(jsonObject, "forcedTime"),
+                priorityTime = getLong(jsonObject, "priorityTime"),
+                priorityActionMaximum = getInt(jsonObject, "priorityActionMaximum"),
             )
         }
 
 
-        private fun jsonToGroupRaw(groupRawJson: JsonElement, groupIndex: Int): RawAppGroup {
+        private fun jsonToGroupRaw(groupRawJson: JsonElement): RawAppGroup {
             val jsonObject = when (groupRawJson) {
                 JsonNull -> error("group must not be null")
                 is JsonObject -> groupRawJson
@@ -602,20 +748,22 @@ data class RawSubscription(
                 name = getString(jsonObject, "name") ?: error("miss group name"),
                 desc = getString(jsonObject, "desc"),
                 enable = getBoolean(jsonObject, "enable"),
-                key = getInt(jsonObject, "key") ?: groupIndex,
+                key = getInt(jsonObject, "key") ?: error("miss group key"),
                 rules = when (val rulesJson = jsonObject["rules"]) {
                     null, JsonNull -> emptyList()
                     is JsonPrimitive, is JsonObject -> JsonArray(listOf(rulesJson))
                     is JsonArray -> rulesJson
                 }.map {
                     jsonToRuleRaw(it)
-                },
-                quickFind = getBoolean(jsonObject, "quickFind"),
+                }.distinctNotNullBy { it.key },
+                fastQuery = getBoolean(jsonObject, "fastQuery"),
+                matchRoot = getBoolean(jsonObject, "matchRoot"),
                 actionMaximum = getInt(jsonObject, "actionMaximum"),
                 matchDelay = getLong(jsonObject, "matchDelay"),
                 matchTime = getLong(jsonObject, "matchTime"),
                 resetMatch = getString(jsonObject, "resetMatch"),
                 snapshotUrls = getStringIArray(jsonObject, "snapshotUrls"),
+                excludeSnapshotUrls = getStringIArray(jsonObject, "excludeSnapshotUrls"),
                 exampleUrls = getStringIArray(jsonObject, "exampleUrls"),
                 actionMaximumKey = getInt(jsonObject, "actionMaximumKey"),
                 actionCdKey = getInt(jsonObject, "actionCdKey"),
@@ -626,20 +774,29 @@ data class RawSubscription(
                 excludeVersionCodes = getLongIArray(jsonObject, "excludeVersionCodes"),
                 versionNames = getStringIArray(jsonObject, "versionNames"),
                 excludeVersionNames = getStringIArray(jsonObject, "excludeVersionNames"),
+                priorityTime = getLong(jsonObject, "priorityTime"),
+                priorityActionMaximum = getInt(jsonObject, "priorityActionMaximum"),
+                ignoreGlobalGroupMatch = getBoolean(jsonObject, "ignoreGlobalGroupMatch"),
             )
         }
 
-        private fun jsonToAppRaw(jsonObject: JsonObject, appIndex: Int): RawApp {
+        private fun jsonToAppRaw(jsonObject: JsonObject, appIndex: Int? = null): RawApp {
             return RawApp(
-                id = getString(jsonObject, "id") ?: error("miss subscription.apps[$appIndex].id"),
+                id = getString(jsonObject, "id") ?: error(
+                    if (appIndex != null) {
+                        "miss subscription.apps[$appIndex].id"
+                    } else {
+                        "miss id"
+                    }
+                ),
                 name = getString(jsonObject, "name"),
                 groups = (when (val groupsJson = jsonObject["groups"]) {
                     null, JsonNull -> emptyList()
                     is JsonPrimitive, is JsonObject -> JsonArray(listOf(groupsJson))
                     is JsonArray -> groupsJson
-                }).mapIndexed { index, jsonElement ->
-                    jsonToGroupRaw(jsonElement, index)
-                },
+                }).map { jsonElement ->
+                    jsonToGroupRaw(jsonElement)
+                }.distinctByIfAny { it.key },
             )
         }
 
@@ -663,12 +820,14 @@ data class RawSubscription(
                 name = getString(jsonObject, "name"),
                 actionCd = getLong(jsonObject, "actionCd"),
                 actionDelay = getLong(jsonObject, "actionDelay"),
-                quickFind = getBoolean(jsonObject, "quickFind"),
+                fastQuery = getBoolean(jsonObject, "fastQuery"),
+                matchRoot = getBoolean(jsonObject, "matchRoot"),
                 actionMaximum = getInt(jsonObject, "actionMaximum"),
                 matchDelay = getLong(jsonObject, "matchDelay"),
                 matchTime = getLong(jsonObject, "matchTime"),
                 resetMatch = getString(jsonObject, "resetMatch"),
                 snapshotUrls = getStringIArray(jsonObject, "snapshotUrls"),
+                excludeSnapshotUrls = getStringIArray(jsonObject, "excludeSnapshotUrls"),
                 exampleUrls = getStringIArray(jsonObject, "exampleUrls"),
                 actionMaximumKey = getInt(jsonObject, "actionMaximumKey"),
                 actionCdKey = getInt(jsonObject, "actionCdKey"),
@@ -679,32 +838,37 @@ data class RawSubscription(
                     jsonToGlobalApp(
                         jsonElement.jsonObject, index
                     )
-                },
+                }?.distinctByIfAny { it.id },
                 action = getString(jsonObject, "action"),
                 preKeys = getIntIArray(jsonObject, "preKeys"),
                 excludeMatches = getStringIArray(jsonObject, "excludeMatches"),
-                matches = getStringIArray(jsonObject, "matches") ?: error("miss matches"),
+                excludeAllMatches = getStringIArray(jsonObject, "excludeAllMatches"),
+                matches = getStringIArray(jsonObject, "matches"),
+                anyMatches = getStringIArray(jsonObject, "anyMatches"),
                 order = getInt(jsonObject, "order"),
                 forcedTime = getLong(jsonObject, "forcedTime"),
                 position = getPosition(jsonObject),
+                priorityTime = getLong(jsonObject, "priorityTime"),
+                priorityActionMaximum = getInt(jsonObject, "priorityActionMaximum"),
             )
         }
 
-        private fun jsonToGlobalGroups(jsonObject: JsonObject, groupIndex: Int): RawGlobalGroup {
+        private fun jsonToGlobalGroup(jsonObject: JsonObject, groupIndex: Int): RawGlobalGroup {
             return RawGlobalGroup(
-                key = getInt(jsonObject, "key")
-                    ?: error("miss group[$groupIndex].key"),
+                key = getInt(jsonObject, "key") ?: error("miss group[$groupIndex].key"),
                 name = getString(jsonObject, "name") ?: error("miss group[$groupIndex].name"),
                 desc = getString(jsonObject, "desc"),
                 enable = getBoolean(jsonObject, "enable"),
                 actionCd = getLong(jsonObject, "actionCd"),
                 actionDelay = getLong(jsonObject, "actionDelay"),
-                quickFind = getBoolean(jsonObject, "quickFind"),
+                fastQuery = getBoolean(jsonObject, "fastQuery"),
+                matchRoot = getBoolean(jsonObject, "matchRoot"),
                 actionMaximum = getInt(jsonObject, "actionMaximum"),
                 matchDelay = getLong(jsonObject, "matchDelay"),
                 matchTime = getLong(jsonObject, "matchTime"),
                 resetMatch = getString(jsonObject, "resetMatch"),
                 snapshotUrls = getStringIArray(jsonObject, "snapshotUrls"),
+                excludeSnapshotUrls = getStringIArray(jsonObject, "excludeSnapshotUrls"),
                 exampleUrls = getStringIArray(jsonObject, "exampleUrls"),
                 actionMaximumKey = getInt(jsonObject, "actionMaximumKey"),
                 actionCdKey = getInt(jsonObject, "actionCdKey"),
@@ -715,18 +879,22 @@ data class RawSubscription(
                     jsonToGlobalApp(
                         jsonElement.jsonObject, index
                     )
-                } ?: emptyList(),
-                rules = jsonObject["rules"]?.jsonArray?.map { jsonElement ->
+                }?.distinctByIfAny { it.id },
+                rules = (jsonObject["rules"]?.jsonArray?.map { jsonElement ->
                     jsonToGlobalRule(jsonElement.jsonObject)
-                } ?: emptyList(),
+                } ?: emptyList()).distinctNotNullBy { it.key },
                 order = getInt(jsonObject, "order"),
                 scopeKeys = getIntIArray(jsonObject, "scopeKeys"),
                 forcedTime = getLong(jsonObject, "forcedTime"),
+                priorityTime = getLong(jsonObject, "priorityTime"),
+                priorityActionMaximum = getInt(jsonObject, "priorityActionMaximum"),
+                disableIfAppGroupMatch = getString(jsonObject, "disableIfAppGroupMatch"),
             )
         }
 
         private fun jsonToSubscriptionRaw(rootJson: JsonObject): RawSubscription {
-            return RawSubscription(id = getLong(rootJson, "id") ?: error("miss subscription.id"),
+            return RawSubscription(
+                id = getLong(rootJson, "id") ?: error("miss subscription.id"),
                 name = getString(rootJson, "name") ?: error("miss subscription.name"),
                 version = getInt(rootJson, "version") ?: error("miss subscription.version"),
                 author = getString(rootJson, "author"),
@@ -735,9 +903,11 @@ data class RawSubscription(
                 checkUpdateUrl = getString(rootJson, "checkUpdateUrl"),
                 apps = (rootJson["apps"]?.jsonArray?.mapIndexed { index, jsonElement ->
                     jsonToAppRaw(
-                        jsonElement.jsonObject, index
+                        jsonElement.jsonObject,
+                        index
                     )
-                } ?: emptyList()),
+                } ?: emptyList()).filterIfNotAll { it.groups.isNotEmpty() }
+                    .distinctByIfAny { it.id },
                 categories = (rootJson["categories"]?.jsonArray?.mapIndexed { index, jsonElement ->
                     RawCategory(
                         key = getInt(jsonElement.jsonObject, "key")
@@ -746,94 +916,45 @@ data class RawSubscription(
                             ?: error("miss categories[$index].name"),
                         enable = getBoolean(jsonElement.jsonObject, "enable"),
                     )
-                } ?: emptyList()),
+                } ?: emptyList()).filterIfNotAll { it.name.isNotEmpty() }
+                    .distinctByIfAny { it.key },
                 globalGroups = (rootJson["globalGroups"]?.jsonArray?.mapIndexed { index, jsonElement ->
-                    jsonToGlobalGroups(jsonElement.jsonObject, index)
-                } ?: emptyList())
+                    jsonToGlobalGroup(jsonElement.jsonObject, index)
+                } ?: emptyList()).distinctByIfAny { it.key }
             )
         }
 
-        private fun <T> List<T>.findDuplicatedItem(predicate: (T) -> Any?): T? {
-            forEach { v ->
-                val key = predicate(v)
-                if (key != null && any { v2 -> v2 !== v && predicate(v2) == key }) {
-                    return v
+        private fun <T> List<T>.distinctNotNullBy(selector: (T) -> Any?): List<T> {
+            val set = HashSet<Any>()
+            val list = ArrayList<T>()
+            forEach { e ->
+                val key = selector(e)
+                if (key == null || set.add(key)) {
+                    list.add(e)
                 }
             }
-            return null
+            return list
         }
 
         fun parse(source: String, json5: Boolean = true): RawSubscription {
-            val text = if (json5) json5ToJson(source) else source
-            val subscription = jsonToSubscriptionRaw(json.parseToJsonElement(text).jsonObject)
-            subscription.categories.findDuplicatedItem { v -> v.key }?.let { v ->
-                error("duplicated category: key=${v.key}")
+            val element = if (json5) {
+                Json5.parseToJson5Element(source)
+            } else {
+                json.parseToJsonElement(source)
             }
-            subscription.globalGroups.findDuplicatedItem { v -> v.key }?.let { v ->
-                error("duplicated global group: key=${v.key}")
-            }
-            subscription.globalGroups.forEach { g ->
-                g.rules.findDuplicatedItem { v -> v.key }?.let { v ->
-                    error("duplicated global rule: key=${v.key}, groupKey=${g.key}")
-                }
-            }
-            subscription.apps.findDuplicatedItem { v -> v.id }?.let { v ->
-                error("duplicated app: ${v.id}")
-            }
-            subscription.apps.forEach { a ->
-                a.groups.findDuplicatedItem { v -> v.key }?.let { v ->
-                    error("duplicated app group: key=${v.key}, appId=${a.id}")
-                }
-                a.groups.forEach { g ->
-                    g.rules.findDuplicatedItem { v -> v.key }?.let { v ->
-                        error("duplicated app rule: key=${v.key}, groupKey=${g.key}, appId=${a.id}")
-                    }
-                }
-            }
-            return subscription
+            return jsonToSubscriptionRaw(element.jsonObject)
         }
 
-        fun parseRawApp(source: String, json5: Boolean = true): RawApp {
-            val text = if (json5) json5ToJson(source) else source
-            val a = jsonToAppRaw(json.parseToJsonElement(text).jsonObject, 0)
-            a.groups.findDuplicatedItem { v -> v.key }?.let { v ->
-                error("duplicated app group: key=${v.key}")
-            }
-            a.groups.forEach { g ->
-                g.rules.findDuplicatedItem { v -> v.key }?.let { v ->
-                    error("duplicated app rule: key=${v.key}, groupKey=${g.key}")
-                }
-            }
-            return a
+        fun parseApp(jsonObject: JsonObject): RawApp {
+            return jsonToAppRaw(jsonObject)
         }
 
-        fun parseRawGroup(source: String, json5: Boolean = true): RawAppGroup {
-            val text = if (json5) json5ToJson(source) else source
-            val g = jsonToGroupRaw(json.parseToJsonElement(text).jsonObject, 0)
-            g.rules.findDuplicatedItem { v -> v.key }?.let { v ->
-                error("duplicated app rule: key=${v.key}")
-            }
-            return g
+        fun parseAppGroup(jsonObject: JsonObject): RawAppGroup {
+            return jsonToGroupRaw(jsonObject)
         }
 
-        fun parseRawGlobalGroup(source: String, json5: Boolean = true): RawGlobalGroup {
-            val text = if (json5) json5ToJson(source) else source
-            val g = jsonToGlobalGroups(json.parseToJsonElement(text).jsonObject, 0)
-            g.rules.findDuplicatedItem { v -> v.key }?.let { v ->
-                error("duplicated global rule: key=${v.key}")
-            }
-            return g
+        fun parseGlobalGroup(jsonObject: JsonObject): RawGlobalGroup {
+            return jsonToGlobalGroup(jsonObject, 0)
         }
     }
-
 }
-
-
-
-
-
-
-
-
-
-
